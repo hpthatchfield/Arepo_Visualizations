@@ -69,7 +69,7 @@ Desktop.ini
 *-checkpoint.ipynb
 
 # --- Project: generated examples / scratch (not package source) ---
-example_output/
+# Keep heavy intermediates/videos ignored, but allow lightweight demo images in example_output/.
 test_plots/
 flythrough_frames/
 *.mp4

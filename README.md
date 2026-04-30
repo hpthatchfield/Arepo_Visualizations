@@ -22,6 +22,16 @@ Notebooks in `examples/` are meant to run top to bottom after you give paths for
 | `lbv_demo.ipynb` | CO-weighted `l–b` and `l–v` maps |
 | `surface_density_flythrough_demo.ipynb` | Camera path + PNG frames |
 
+## Demo output preview
+
+Save rendered demo figures/GIFs to `example_output/` and they will render directly here.
+Suggested filenames below match the current notebooks:
+
+![B-field map demo](example_output/bfield_demo.png)
+![Planck LIC demo](example_output/bfield_planck_lic_demo.png)
+![LBV demo](example_output/lbv_demo.png)
+![Surface density flythrough](example_output/surface_density_flythrough.gif)
+
 ## Package layout
 
 | Module | Role |
