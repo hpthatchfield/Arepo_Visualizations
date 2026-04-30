@@ -1,0 +1,2 @@
+# Default matplotlib style for simviz (extend as ported code needs).
+figure.facecolor: white
