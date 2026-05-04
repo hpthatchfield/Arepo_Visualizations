@@ -1,6 +1,7 @@
 """Snapshot I/O, unit conversions, and physical quantities."""
 
 import gc
+import os
 import re
 
 import numpy as np
@@ -322,46 +323,269 @@ class MyObject:
                 setattr(self, key, value)
 
 
-def read_sink_snap(filename, max_sne=2000, max_accretion_events=50):
-    """Read binary sink snapshot used by movie scripts."""
-    snap_num = re.findall(r"\d+", str(filename))
+def sink_snap_dtype(max_sne=2000, max_accretion_events=50):
+    """Structured dtype for binary ``sink_snap_*`` files (with 8-byte alignment).
 
-    import pycstruct
+    Field order and sizes must match the simulation output / legacy ``pycstruct``
+    layout. ``max_sne`` and ``max_accretion_events`` must match compile-time
+    constants used when the run was written.
 
-    struct = pycstruct.StructDef(alignment=8)
-    struct.add("float64", "Pos", shape=3)
-    struct.add("float64", "Vel", shape=3)
-    struct.add("float64", "Accel", shape=3)
-    struct.add("float64", "Mass")
-    struct.add("float64", "FormationMass")
-    struct.add("float64", "FormationTime")
-    struct.add("uint64", "ID")
-    struct.add("uint32", "HomeTask")
-    struct.add("uint32", "Index")
-    struct.add("uint32", "FormationOrder")
-    struct.add("uint32", "N_sne")
-    struct.add("float64", "StellarMass")
-    struct.add("float64", "explosion_time", shape=max_sne)
-    struct.add("float64", "MassStillToConvert", shape=max_accretion_events)
-    struct.add("float64", "AccretionTime", shape=max_accretion_events)
+    Parameters
+    ----------
+    max_sne : int, optional
+        Length of the ``explosion_time`` array per sink.
+    max_accretion_events : int, optional
+        Length of ``MassStillToConvert`` and ``AccretionTime`` per sink.
 
-    with open(filename, "rb") as file_handle:
-        time = np.fromfile(file_handle, np.double, 1)
-        nsinks = np.fromfile(file_handle, np.uint32, 1)
+    Returns
+    -------
+    numpy.dtype
+        Structured dtype with ``align=True``.
+    """
+    return np.dtype(
+        [
+            ("Pos", np.float64, (3,)),
+            ("Vel", np.float64, (3,)),
+            ("Accel", np.float64, (3,)),
+            ("Mass", np.float64),
+            ("FormationMass", np.float64),
+            ("FormationTime", np.float64),
+            ("ID", np.uint64),
+            ("HomeTask", np.uint32),
+            ("Index", np.uint32),
+            ("FormationOrder", np.uint32),
+            ("N_sne", np.uint32),
+            ("StellarMass", np.float64),
+            ("explosion_time", np.float64, (max_sne,)),
+            ("MassStillToConvert", np.float64, (max_accretion_events,)),
+            ("AccretionTime", np.float64, (max_accretion_events,)),
+        ],
+        align=True,
+    )
 
-        inbytes = file_handle.read(struct.size())
-        data = struct.deserialize(inbytes)
 
-        for item in data:
-            data[item] = [data[item]]
+def read_sink_snap_binary(
+    filename,
+    max_sne=2000,
+    max_accretion_events=50,
+    check_filesize=True,
+):
+    """Read a binary ``sink_snap_*`` file using NumPy only (no ``pycstruct``).
 
-        for _ in range(nsinks[0] - 1):
-            inbytes = file_handle.read(struct.size())
-            row = struct.deserialize(inbytes)
-            for item in data:
-                data[item] += [row[item]]
+    Parameters
+    ----------
+    filename : str or os.PathLike
+        Path to the sink snapshot file.
+    max_sne, max_accretion_events : int, optional
+        Passed to :func:`sink_snap_dtype`; must match the writer.
+    check_filesize : bool, optional
+        If True, verify the file is large enough for ``NSinks`` records.
 
-    data["time"] = [time]
-    data["NSinks"] = [nsinks]
-    data["snap_num"] = int(snap_num[0]) if snap_num else -1
-    return MyObject(data)
+    Returns
+    -------
+    out : dict
+        ``time`` : float
+            Simulation time from file header.
+        ``NSinks`` : int
+            Number of sink records.
+        ``snap_num`` : int or None
+            Last integer group parsed from the basename, if any.
+        ``data`` : ndarray
+            Structured array of length ``NSinks``.
+        ``dtype`` : numpy.dtype
+            The dtype used for reading.
+    """
+    filename = os.fspath(filename)
+    dt = sink_snap_dtype(max_sne=max_sne, max_accretion_events=max_accretion_events)
+    matches = re.findall(r"\d+", os.path.basename(filename))
+    snap_num = int(matches[-1]) if matches else None
+
+    with open(filename, "rb") as fhandle:
+        time_arr = np.fromfile(fhandle, dtype=np.float64, count=1)
+        if time_arr.size != 1:
+            raise OSError(f"{filename}: could not read time header (float64).")
+        time_val = float(time_arr[0])
+
+        nsinks_arr = np.fromfile(fhandle, dtype=np.uint32, count=1)
+        if nsinks_arr.size != 1:
+            raise OSError(f"{filename}: could not read NSinks header (uint32).")
+        nsinks = int(nsinks_arr[0])
+
+        if check_filesize:
+            pos = fhandle.tell()
+            fhandle.seek(0, os.SEEK_END)
+            file_size = fhandle.tell()
+            fhandle.seek(pos, os.SEEK_SET)
+            expected = pos + nsinks * dt.itemsize
+            if file_size < expected:
+                raise OSError(
+                    f"{filename}: file too small for NSinks={nsinks} with this dtype.\n"
+                    f"file_size={file_size} bytes, expected_at_least={expected} bytes.\n"
+                    "Check max_sne / max_accretion_events against the simulation."
+                )
+
+        if nsinks == 0:
+            rec = np.array([], dtype=dt)
+        else:
+            rec = np.fromfile(fhandle, dtype=dt, count=nsinks)
+            if rec.size != nsinks:
+                raise OSError(f"{filename}: expected {nsinks} records, got {rec.size}.")
+
+    return {
+        "time": time_val,
+        "NSinks": nsinks,
+        "snap_num": snap_num,
+        "data": rec,
+        "dtype": dt,
+    }
+
+
+def _sink_structured_to_legacy_lists(rec, time_header, nsinks_header):
+    """Build movie-script dict (list per field) from structured sink records."""
+    legacy = {}
+    if rec.size == 0:
+        for name in rec.dtype.names:
+            legacy[name] = []
+    else:
+        for name in rec.dtype.names:
+            col = rec[name]
+            if col.ndim == 1:
+                legacy[name] = [np.asarray(col[i]) for i in range(rec.shape[0])]
+            else:
+                legacy[name] = [np.asarray(col[i]) for i in range(rec.shape[0])]
+
+    legacy["time"] = [time_header]
+    legacy["NSinks"] = [nsinks_header]
+    return legacy
+
+
+def read_sink_snap(filename, max_sne=2000, max_accretion_events=50, check_filesize=True):
+    """Read binary sink snapshot used by movie scripts.
+
+    Uses :func:`read_sink_snap_binary` (NumPy structured arrays). Returns a
+    :class:`MyObject` whose attributes match the legacy list-based layout
+    (each field is a list over sinks, plus ``time`` and ``NSinks`` as
+    single-element lists, and integer ``snap_num``).
+
+    For structured-array access use :func:`read_sink_snap_binary` instead.
+
+    Parameters
+    ----------
+    filename : str or os.PathLike
+        Sink snapshot path.
+    max_sne, max_accretion_events : int, optional
+        Layout dimensions; must match the simulation output.
+    check_filesize : bool, optional
+        Passed through to :func:`read_sink_snap_binary`.
+
+    Returns
+    -------
+    MyObject
+        Attribute bag compatible with older movie scripts.
+    """
+    out = read_sink_snap_binary(
+        filename,
+        max_sne=max_sne,
+        max_accretion_events=max_accretion_events,
+        check_filesize=check_filesize,
+    )
+    time_hdr = np.array([out["time"]], dtype=np.float64)
+    nsinks_hdr = np.array([out["NSinks"]], dtype=np.uint32)
+    legacy = _sink_structured_to_legacy_lists(out["data"], time_hdr, nsinks_hdr)
+
+    matches = re.findall(r"\d+", os.path.basename(filename))
+    snap_int = int(matches[0]) if matches else -1
+
+    legacy["snap_num"] = snap_int
+    return MyObject(legacy)
+
+
+def build_sink_data_sinkwise(sink_data_snapwise, snaps=None, require_ids_nonzero=True):
+    """Reorganize snap-wise sink dicts into per-sink-ID time series.
+
+    ``sink_data_snapwise`` maps snapshot index ``isnap`` to a dict like the return
+    value of :func:`read_sink_snap_binary`, optionally with extra keys per snap
+    (e.g. ``ParentDensity``, ``ParentDistance``) attached after reading gas.
+
+    Parameters
+    ----------
+    sink_data_snapwise : dict
+        ``{isnap: {"time": float, "data": structured_array, ...}, ...}``.
+    snaps : array-like of int or None, optional
+        Snapshot indices to include; default is sorted keys of ``sink_data_snapwise``.
+    require_ids_nonzero : bool, optional
+        If True, ignore sink records with ``ID == 0``.
+
+    Returns
+    -------
+    dict
+        ``sink_id ->`` dict with shared ``time`` and ``snaps`` arrays plus per-sink
+        series ``pos``, ``mass``, ``rho_parent``, ``d_parent`` (nan if missing) and
+        scalars ``formationTime``, ``formationMass``, ``first_snap``, ``first_index``.
+    """
+    if snaps is None:
+        snaps = np.array(sorted(sink_data_snapwise.keys()), dtype=int)
+    else:
+        snaps = np.asarray(snaps, dtype=int)
+    n = len(snaps)
+
+    snap_t = np.full(n, np.nan, dtype=float)
+
+    all_ids = set()
+    for i, isnap in enumerate(snaps):
+        rec = sink_data_snapwise[isnap]["data"]
+        snap_t[i] = float(sink_data_snapwise[isnap]["time"])
+
+        ids = np.asarray(rec["ID"], dtype=np.uint64)
+        if require_ids_nonzero:
+            ids = ids[ids != 0]
+        all_ids.update(ids.tolist())
+
+    sink_data_sinkwise = {}
+    for sid in all_ids:
+        sid = int(sid)
+        sink_data_sinkwise[sid] = {
+            "time": snap_t,
+            "snaps": snaps,
+            "pos": np.full((n, 3), np.nan, dtype=float),
+            "mass": np.full(n, np.nan, dtype=float),
+            "rho_parent": np.full(n, np.nan, dtype=float),
+            "d_parent": np.full(n, np.nan, dtype=float),
+            "formationTime": np.nan,
+            "formationMass": np.nan,
+            "first_snap": None,
+            "first_index": None,
+        }
+
+    for i, isnap in enumerate(snaps):
+        rec = sink_data_snapwise[isnap]["data"]
+        ids = np.asarray(rec["ID"], dtype=np.uint64)
+
+        rho = sink_data_snapwise[isnap].get("ParentDensity", None)
+        dist = sink_data_snapwise[isnap].get("ParentDistance", None)
+
+        if require_ids_nonzero:
+            id_to_row = {int(sid): j for j, sid in enumerate(ids) if sid != 0}
+        else:
+            id_to_row = {int(sid): j for j, sid in enumerate(ids)}
+
+        for sid, j in id_to_row.items():
+            tr = sink_data_sinkwise.get(sid)
+            if tr is None:
+                continue
+
+            tr["pos"][i, :] = np.asarray(rec["Pos"][j]).reshape(3)
+            tr["mass"][i] = float(rec["Mass"][j])
+
+            if rho is not None:
+                tr["rho_parent"][i] = float(rho[j])
+            if dist is not None:
+                tr["d_parent"][i] = float(dist[j])
+
+            if tr["first_snap"] is None:
+                tr["first_snap"] = int(isnap)
+                tr["first_index"] = int(i)
+                tr["formationTime"] = float(np.asarray(rec["FormationTime"][j]).squeeze())
+                tr["formationMass"] = float(np.asarray(rec["FormationMass"][j]).squeeze())
+
+    return sink_data_sinkwise
