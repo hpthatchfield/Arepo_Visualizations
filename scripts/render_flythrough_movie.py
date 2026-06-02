@@ -97,6 +97,18 @@ def project_mass_map(x, y, z, masses, cam):
     return sigma
 
 
+def color_limits(sigma, vmin_floor=1e-6):
+    """Log-scale limits from positive pixels (same as preview_flythrough_frame)."""
+    pos = sigma[sigma > 0]
+    if pos.size == 0:
+        return VMIN, VMAX
+    vmin = max(float(np.percentile(pos, 1)), vmin_floor)
+    vmax = float(np.percentile(pos, 99.5))
+    if vmax <= vmin:
+        vmax = vmin * 10.0
+    return vmin, vmax
+
+
 def write_png(sigma, out_path, vmin, vmax, title=None):
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
@@ -146,6 +158,12 @@ def main():
     parser.add_argument("--tilt-deg", type=float, default=35.0)
     parser.add_argument("--vmin", type=float, default=VMIN)
     parser.add_argument("--vmax", type=float, default=VMAX)
+    parser.add_argument(
+        "--lock-color-scale",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="autoscale vmin/vmax from the first rendered frame, then hold fixed",
+    )
     args = parser.parse_args()
 
     snap_paths = list_snaps(
@@ -182,6 +200,9 @@ def main():
 
     cached = None
     x = y = z = masses = None
+    vmin = args.vmin
+    vmax = args.vmax
+    scale_locked = False
     t0 = time.time()
 
     for i in range(args.frame_start, frame_end):
@@ -195,9 +216,14 @@ def main():
 
         cam = cameras[i]
         sigma = project_mass_map(x, y, z, masses, cam)
+        if args.lock_color_scale and not scale_locked:
+            vmin, vmax = color_limits(sigma)
+            scale_locked = True
+            print(f"locked color scale from frame {i}: vmin={vmin:.4g}  vmax={vmax:.4g}")
+
         out_path = args.output_dir / f"frame_{i:04d}.png"
         title = f"frame {i:04d}  snap {snap_num_from_name(snap_paths[sidx], args.snap_prefix)}"
-        write_png(sigma, out_path, args.vmin, args.vmax, title=title)
+        write_png(sigma, out_path, vmin, vmax, title=title)
 
         if (i - args.frame_start) % 10 == 0:
             print(f"  wrote {out_path.name}")

@@ -1,4 +1,4 @@
-"""Snapshot I/O, unit conversions, and physical quantities."""
+"""Snapshot I/O, unit conversions, and constants."""
 
 import gc
 import os
@@ -214,7 +214,7 @@ def read_snapshot_binary(filename):
     Returns
     -------
     data_gas, data_sink, header : tuple
-        Gas and sink dictionaries plus header dictionary.
+         Gas and sink dictionaries plus header dictionary.
     """
     with open(filename, mode="rb") as file_handle:
         data = {}
@@ -257,7 +257,7 @@ def mask_cylinder(x, y, R_max, z=None, z_max=None):
     R_max : float
         Maximum cylindrical radius (same units as x, y).
     z : array-like, optional
-        Vertical coordinates. If given with z_max, also applies a height cut.
+        Vertical coordinates. If given with z_max, also applies a z cut.
     z_max : float, optional
         Maximum |z|. Ignored unless z is also provided.
 
@@ -451,6 +451,58 @@ def read_sink_snap(filename, max_sne=2000, max_accretion_events=50, check_filesi
 
 DEFAULT_SINK_MAX_SNE = 2000
 DEFAULT_SINK_MAX_ACCRETION_EVENTS = 50
+
+
+def attach_parent_fields_from_hdf5(sink_snap_out, filename):
+    """Set ``ParentDensity`` / ``ParentDistance`` on a snapwise entry from HDF5 PartType5.
+
+    Matches ``sink_snap`` record ``ID`` to ``PartType5/ParticleIDs`` (same association
+    as Dani's notebooks and ``build_sink_data_sinkwise``). Arrays are per sink row in
+    the binary snapshot, ready for ``build_sink_data_sinkwise`` to copy into
+    ``rho_parent`` / ``d_parent`` tracks.
+    """
+    import h5py
+
+    filename = os.fspath(filename)
+    rec = sink_snap_out["data"]
+    n_sink = int(rec.size)
+    rho = np.full(n_sink, np.nan, dtype=np.float64)
+    dist = np.full(n_sink, np.nan, dtype=np.float64)
+
+    with h5py.File(filename, "r") as fhandle:
+        if "PartType5" not in fhandle:
+            sink_snap_out["ParentDensity"] = rho
+            sink_snap_out["ParentDistance"] = dist
+            return sink_snap_out
+
+        grp = fhandle["PartType5"]
+        if "ParticleIDs" not in grp or "ParentDensity" not in grp:
+            sink_snap_out["ParentDensity"] = rho
+            sink_snap_out["ParentDistance"] = dist
+            return sink_snap_out
+
+        pids = np.asarray(grp["ParticleIDs"][:], dtype=np.uint64)
+        rho_pt5 = np.asarray(grp["ParentDensity"][:], dtype=np.float64)
+        dist_pt5 = None
+        if "ParentDistance" in grp:
+            dist_pt5 = np.asarray(grp["ParentDistance"][:], dtype=np.float64)
+        pid_to_idx = {int(pid): i for i, pid in enumerate(pids)}
+
+        sink_ids = np.asarray(rec["ID"], dtype=np.uint64)
+        for j in range(n_sink):
+            sid = int(sink_ids[j])
+            if sid == 0:
+                continue
+            idx = pid_to_idx.get(sid)
+            if idx is None:
+                continue
+            rho[j] = float(rho_pt5[idx])
+            if dist_pt5 is not None:
+                dist[j] = float(dist_pt5[idx])
+
+    sink_snap_out["ParentDensity"] = rho
+    sink_snap_out["ParentDistance"] = dist
+    return sink_snap_out
 
 
 def valid_explosion_times(

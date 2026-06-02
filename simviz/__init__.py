@@ -1,4 +1,4 @@
-"""Arepo-oriented plotting helpers (maps, LIC, projections)."""
+"""Arepo-oriented plotting functions"""
 
 from .field_plots import (
     adaptive_gaussian_blend_mass_map,
@@ -32,6 +32,7 @@ from .utils import (
     mask_box,
     mask_cylinder,
     mask_galactic_window,
+    attach_parent_fields_from_hdf5,
     valid_explosion_times,
     read_sink_snap,
     read_sink_snap_binary,
@@ -43,6 +44,7 @@ from .utils import (
 __all__ = [
     "adaptive_gaussian_blend_mass_map",
     "masked_fill_mass_map",
+    "attach_parent_fields_from_hdf5",
     "build_sink_data_sinkwise",
     "CONSTANTS",
     "calc_bfield_uG",
