@@ -41,10 +41,14 @@ def snap_num_from_name(path, prefix=SNAP_PREFIX):
     return int(m.group(1))
 
 
-def list_snaps(snap_dir, prefix=SNAP_PREFIX):
+def list_snaps(snap_dir, prefix=SNAP_PREFIX, first_snap_number=None, last_snap_number=None):
     paths = sorted(snap_dir.glob(f"{prefix}_*.hdf5"), key=lambda p: snap_num_from_name(p, prefix))
+    if first_snap_number is not None:
+        paths = [p for p in paths if snap_num_from_name(p, prefix) >= first_snap_number]
+    if last_snap_number is not None:
+        paths = [p for p in paths if snap_num_from_name(p, prefix) <= last_snap_number]
     if not paths:
-        print(f"ERROR: no {prefix}_*.hdf5 in {snap_dir}")
+        print(f"ERROR: no {prefix}_*.hdf5 in {snap_dir} (check --first-snap-number / --last-snap-number)")
         sys.exit(1)
     return paths
 
@@ -119,6 +123,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--snap-dir", type=Path, required=True)
     parser.add_argument("--snap-prefix", default=SNAP_PREFIX)
+    parser.add_argument(
+        "--first-snap-number",
+        type=int,
+        default=None,
+        help="only use snaps with this number or higher in the filename",
+    )
+    parser.add_argument(
+        "--last-snap-number",
+        type=int,
+        default=None,
+        help="only use snaps with this number or lower in the filename",
+    )
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("flythrough_frames"))
     parser.add_argument("--n-frames", type=int, default=300)
     parser.add_argument("--frames-per-snap", type=int, default=5)
@@ -132,11 +148,22 @@ def main():
     parser.add_argument("--vmax", type=float, default=VMAX)
     args = parser.parse_args()
 
-    snap_paths = list_snaps(args.snap_dir, prefix=args.snap_prefix)
+    snap_paths = list_snaps(
+        args.snap_dir,
+        prefix=args.snap_prefix,
+        first_snap_number=args.first_snap_number,
+        last_snap_number=args.last_snap_number,
+    )
     frame_end = args.n_frames if args.frame_end is None else args.frame_end
     if frame_end <= args.frame_start:
         print("ERROR: frame-end must be > frame-start")
         sys.exit(1)
+    n_render = frame_end - args.frame_start
+    if n_render > len(snap_paths) * args.frames_per_snap:
+        print(
+            f"warning: {n_render} frames need more snaps than available "
+            f"({len(snap_paths)} after filter); last snap will repeat"
+        )
 
     cameras = camera_path(
         args.n_frames,
@@ -147,8 +174,11 @@ def main():
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"{len(snap_paths)} snaps in {args.snap_dir}")
-    print(f"frames {args.frame_start} .. {frame_end - 1} -> {args.output_dir}")
+    snap_lo = snap_num_from_name(snap_paths[0], args.snap_prefix)
+    snap_hi = snap_num_from_name(snap_paths[-1], args.snap_prefix)
+    print(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
+    print(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
+    print(f"output -> {args.output_dir}")
 
     cached = None
     x = y = z = masses = None
