@@ -168,6 +168,96 @@ def plot_surface_density(
 plot_surface_density_map = plot_surface_density
 
 
+def adaptive_gaussian_blend_mass_map(
+    sigma,
+    sigma_sharp_px,
+    sigma_smooth_px,
+    weight_sigma_px=0.5,
+    percentiles=(5.0, 95.0),
+):
+    """Two-scale Gaussian blend; weight from local log density percentiles."""
+    from scipy.ndimage import gaussian_filter
+
+    sigma = np.asarray(sigma, dtype=np.float64)
+    if float(sigma_sharp_px) <= 0.0 or float(sigma_smooth_px) <= 0.0:
+        raise ValueError("sigma_sharp_px and sigma_smooth_px must be positive.")
+
+    if np.all(sigma <= 0.0):
+        return sigma
+
+    if weight_sigma_px is not None and float(weight_sigma_px) > 0.0:
+        sw = gaussian_filter(sigma, sigma=float(weight_sigma_px), mode="nearest")
+    else:
+        sw = sigma.copy()
+
+    tiny = max(np.finfo(float).tiny, float(np.max(sw)) * 1e-30)
+    sw = np.maximum(sw, tiny)
+    log_s = np.log10(sw)
+    lo = np.percentile(log_s, percentiles[0])
+    hi = np.percentile(log_s, percentiles[1])
+    if hi <= lo:
+        w = np.ones_like(log_s)
+    else:
+        w = (log_s - lo) / (hi - lo)
+        w = np.clip(w, 0.0, 1.0)
+
+    sharp = gaussian_filter(sigma, sigma=float(sigma_sharp_px), mode="nearest")
+    smooth = gaussian_filter(sigma, sigma=float(sigma_smooth_px), mode="nearest")
+    return w * sharp + (1.0 - w) * smooth
+
+
+def masked_fill_mass_map(
+    sigma,
+    sigma_fill_px,
+    sigma_sharp_px=0.0,
+    weight_sigma_px=0.5,
+    percentiles=(20.0, 85.0),
+    mask_power=1.0,
+):
+    """Wide blur fill in low density; sharp (or raw) map in high density."""
+    from scipy.ndimage import gaussian_filter
+
+    sigma = np.asarray(sigma, dtype=np.float64)
+    if float(sigma_fill_px) <= 0.0:
+        raise ValueError("sigma_fill_px must be positive.")
+    if float(sigma_sharp_px) < 0.0:
+        raise ValueError("sigma_sharp_px must be non-negative.")
+
+    if np.all(sigma <= 0.0):
+        return sigma
+
+    if float(sigma_sharp_px) > 0.0:
+        base = gaussian_filter(sigma, sigma=float(sigma_sharp_px), mode="nearest")
+    else:
+        base = sigma.copy()
+
+    fill = gaussian_filter(sigma, sigma=float(sigma_fill_px), mode="nearest")
+
+    if weight_sigma_px is not None and float(weight_sigma_px) > 0.0:
+        sw = gaussian_filter(sigma, sigma=float(weight_sigma_px), mode="nearest")
+    else:
+        sw = sigma.copy()
+
+    tiny = max(np.finfo(float).tiny, float(np.max(sw)) * 1e-30)
+    sw = np.maximum(sw, tiny)
+    log_s = np.log10(sw)
+    lo = np.percentile(log_s, percentiles[0])
+    hi = np.percentile(log_s, percentiles[1])
+    if hi <= lo:
+        w = np.ones_like(log_s)
+    else:
+        w = (log_s - lo) / (hi - lo)
+        w = np.clip(w, 0.0, 1.0)
+
+    mp = float(mask_power)
+    if mp != 1.0:
+        if mp <= 0.0:
+            raise ValueError("mask_power must be positive.")
+        w = w**mp
+
+    return w * base + (1.0 - w) * fill
+
+
 def project_surface_density_camera(
     x,
     y,
@@ -182,38 +272,19 @@ def project_surface_density_camera(
     ny=600,
     z_near=1e-3,
     z_far=None,
+    smooth_sigma_px=None,
+    adaptive_smooth_sigmas=None,
+    adaptive_weight_sigma_px=0.5,
+    adaptive_percentiles=(5.0, 95.0),
+    masked_fill_sigmas=None,
+    masked_fill_weight_sigma_px=0.5,
+    masked_fill_percentiles=(20.0, 85.0),
+    masked_fill_mask_power=1.0,
 ):
-    """Project mass to a perspective camera image plane.
+    """Perspective mass map (2d histogram in camera plane).
 
-    This creates a surface-density-like map in camera coordinates by summing mass
-    from all particles along each line of sight.
-
-    Parameters
-    ----------
-    x, y, z : array-like
-        Particle positions in a common Cartesian frame.
-    masses : array-like
-        Particle masses (code units).
-    camera_position : array-like, shape (3,)
-        Camera position in the same coordinate frame as ``x,y,z``.
-    target : array-like, shape (3,), optional
-        Point the camera looks at; default origin.
-    up_hint : array-like, shape (3,), optional
-        Approximate up direction for camera roll control.
-    fov_x_deg, fov_y_deg : float, optional
-        Horizontal/vertical field of view in degrees. If ``fov_y_deg`` is None,
-        it is set from aspect ratio ``ny/nx``.
-    nx, ny : int, optional
-        Output image resolution.
-    z_near, z_far : float or None, optional
-        Near/far depth clipping in camera coordinates.
-
-    Returns
-    -------
-    sigma : ndarray, shape (ny, nx)
-        Perspective-projected mass map.
-    extent : tuple
-        Fixed image-plane extent ``(-1, 1, -1, 1)`` for plotting.
+    Optional smoothing: smooth_sigma_px, adaptive_smooth_sigmas, or masked_fill_sigmas
+    (only one of the latter two).
     """
     from .projections import world_to_camera
 
@@ -249,6 +320,43 @@ def project_surface_density_camera(
         bins=(nx, ny),
         weights=m_img[in_view],
     ).T
+
+    if masked_fill_sigmas is not None and adaptive_smooth_sigmas is not None:
+        raise ValueError(
+            "Set only one of masked_fill_sigmas or adaptive_smooth_sigmas, not both."
+        )
+
+    if masked_fill_sigmas is not None:
+        if len(masked_fill_sigmas) != 2:
+            raise ValueError(
+                "masked_fill_sigmas must be (sigma_sharp_px, sigma_fill_px)."
+            )
+        spx, sfx = masked_fill_sigmas
+        sigma = masked_fill_mass_map(
+            sigma,
+            sigma_fill_px=sfx,
+            sigma_sharp_px=spx,
+            weight_sigma_px=masked_fill_weight_sigma_px,
+            percentiles=masked_fill_percentiles,
+            mask_power=masked_fill_mask_power,
+        )
+    elif adaptive_smooth_sigmas is not None:
+        if len(adaptive_smooth_sigmas) != 2:
+            raise ValueError(
+                "adaptive_smooth_sigmas must be (sigma_sharp_px, sigma_smooth_px)."
+            )
+        spx, smx = adaptive_smooth_sigmas
+        sigma = adaptive_gaussian_blend_mass_map(
+            sigma,
+            spx,
+            smx,
+            weight_sigma_px=adaptive_weight_sigma_px,
+            percentiles=adaptive_percentiles,
+        )
+    elif smooth_sigma_px is not None and float(smooth_sigma_px) > 0.0:
+        from scipy.ndimage import gaussian_filter
+
+        sigma = gaussian_filter(sigma, sigma=float(smooth_sigma_px), mode="nearest")
 
     return sigma, (-1.0, 1.0, -1.0, 1.0)
 
@@ -853,6 +961,8 @@ def plot_bfield_xy(B_mag, Bx_proj, By_proj, xs, ys, ax=None,
         Overlay headless bars showing projected field orientation; default True.
     orientation_stride : int, optional
         Subsampling stride on the grid for orientation bars; default 30.
+    qcolor : str, optional
+        Color of the quiver plot lines. Default is "white".
 
     Returns
     -------
@@ -860,7 +970,8 @@ def plot_bfield_xy(B_mag, Bx_proj, By_proj, xs, ys, ax=None,
     """
     import matplotlib.colors as colors
     import matplotlib.pyplot as plt
-
+    if qcolor is None:
+        qcolor = "white"
     if cmap is None:
         try:
             import cmasher as cmr
@@ -890,7 +1001,7 @@ def plot_bfield_xy(B_mag, Bx_proj, By_proj, xs, ys, ax=None,
         uy = np.where(safe, Byq / np.where(safe, Bmag_q, 1.0), 0.0)
         ax.quiver(
             XQ, YQ, ux, uy,
-            color="white", alpha=0.55, pivot="middle", scale=40,
+            color=qcolor, alpha=0.85, pivot="middle", scale=40,
             headwidth=0, headlength=0, headaxislength=0,
         )
 

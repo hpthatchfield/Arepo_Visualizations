@@ -1,4 +1,4 @@
-"""Coordinate transforms: GC frame ↔ bar frame ↔ heliocentric galactic (l, b, r)."""
+"""Coordinate transforms: GC frame, bar frame, heliocentric/observational galactic (l, b, r)."""
 
 import numpy as np
 

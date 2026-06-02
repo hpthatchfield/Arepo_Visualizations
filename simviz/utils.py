@@ -114,13 +114,16 @@ def calc_bfield_uG(bfield_code):
     return np.asarray(bfield_code) * CONSTANTS["arepoBfield"] * 1e6
 
 
-def read_snapshot_hdf5(filename):
+def read_snapshot_hdf5(filename, fields=None):
     """Read an HDF5 snapshot and return gas data and header.
 
     Parameters
     ----------
     filename : str or Path
         Snapshot file path.
+    fields : sequence of str or None, optional
+        If set, load only these ``PartType0`` datasets (always reads header attrs).
+        Use for large snapshots when only positions and masses are needed.
 
     Returns
     -------
@@ -134,12 +137,21 @@ def read_snapshot_hdf5(filename):
 
     import h5py
 
+    field_set = None if fields is None else set(fields)
+
     with h5py.File(filename, "r") as fhandle:
         for item in fhandle["Header"].attrs:
             header[item] = fhandle["Header"].attrs[item]
 
         for item in fhandle["PartType0"].keys():
+            if field_set is not None and item not in field_set:
+                continue
             data[item] = fhandle["PartType0"][item][:]
+
+    if field_set is not None:
+        missing = field_set - set(data.keys())
+        if missing:
+            raise KeyError(f"PartType0 missing requested fields: {sorted(missing)}")
 
     gc.collect()
     return data, header
@@ -324,24 +336,7 @@ class MyObject:
 
 
 def sink_snap_dtype(max_sne=2000, max_accretion_events=50):
-    """Structured dtype for binary ``sink_snap_*`` files (with 8-byte alignment).
-
-    Field order and sizes must match the simulation output / legacy ``pycstruct``
-    layout. ``max_sne`` and ``max_accretion_events`` must match compile-time
-    constants used when the run was written.
-
-    Parameters
-    ----------
-    max_sne : int, optional
-        Length of the ``explosion_time`` array per sink.
-    max_accretion_events : int, optional
-        Length of ``MassStillToConvert`` and ``AccretionTime`` per sink.
-
-    Returns
-    -------
-    numpy.dtype
-        Structured dtype with ``align=True``.
-    """
+    """dtype for sink_snap files; layout must match AREPO / movie_utils.read_sink_snap."""
     return np.dtype(
         [
             ("Pos", np.float64, (3,)),
@@ -370,31 +365,7 @@ def read_sink_snap_binary(
     max_accretion_events=50,
     check_filesize=True,
 ):
-    """Read a binary ``sink_snap_*`` file using NumPy only (no ``pycstruct``).
-
-    Parameters
-    ----------
-    filename : str or os.PathLike
-        Path to the sink snapshot file.
-    max_sne, max_accretion_events : int, optional
-        Passed to :func:`sink_snap_dtype`; must match the writer.
-    check_filesize : bool, optional
-        If True, verify the file is large enough for ``NSinks`` records.
-
-    Returns
-    -------
-    out : dict
-        ``time`` : float
-            Simulation time from file header.
-        ``NSinks`` : int
-            Number of sink records.
-        ``snap_num`` : int or None
-            Last integer group parsed from the basename, if any.
-        ``data`` : ndarray
-            Structured array of length ``NSinks``.
-        ``dtype`` : numpy.dtype
-            The dtype used for reading.
-    """
+    """Read sink_snap binary (header + structured records). Returns time, NSinks, data."""
     filename = os.fspath(filename)
     dt = sink_snap_dtype(max_sne=max_sne, max_accretion_events=max_accretion_events)
     matches = re.findall(r"\d+", os.path.basename(filename))
@@ -441,7 +412,7 @@ def read_sink_snap_binary(
 
 
 def _sink_structured_to_legacy_lists(rec, time_header, nsinks_header):
-    """Build movie-script dict (list per field) from structured sink records."""
+    """Old movie-script layout: one list entry per sink per field."""
     legacy = {}
     if rec.size == 0:
         for name in rec.dtype.names:
@@ -460,29 +431,7 @@ def _sink_structured_to_legacy_lists(rec, time_header, nsinks_header):
 
 
 def read_sink_snap(filename, max_sne=2000, max_accretion_events=50, check_filesize=True):
-    """Read binary sink snapshot used by movie scripts.
-
-    Uses :func:`read_sink_snap_binary` (NumPy structured arrays). Returns a
-    :class:`MyObject` whose attributes match the legacy list-based layout
-    (each field is a list over sinks, plus ``time`` and ``NSinks`` as
-    single-element lists, and integer ``snap_num``).
-
-    For structured-array access use :func:`read_sink_snap_binary` instead.
-
-    Parameters
-    ----------
-    filename : str or os.PathLike
-        Sink snapshot path.
-    max_sne, max_accretion_events : int, optional
-        Layout dimensions; must match the simulation output.
-    check_filesize : bool, optional
-        Passed through to :func:`read_sink_snap_binary`.
-
-    Returns
-    -------
-    MyObject
-        Attribute bag compatible with older movie scripts.
-    """
+    """read_sink_snap_binary wrapped as MyObject for old movie scripts."""
     out = read_sink_snap_binary(
         filename,
         max_sne=max_sne,
@@ -500,28 +449,41 @@ def read_sink_snap(filename, max_sne=2000, max_accretion_events=50, check_filesi
     return MyObject(legacy)
 
 
-def build_sink_data_sinkwise(sink_data_snapwise, snaps=None, require_ids_nonzero=True):
-    """Reorganize snap-wise sink dicts into per-sink-ID time series.
+DEFAULT_SINK_MAX_SNE = 2000
+DEFAULT_SINK_MAX_ACCRETION_EVENTS = 50
 
-    ``sink_data_snapwise`` maps snapshot index ``isnap`` to a dict like the return
-    value of :func:`read_sink_snap_binary`, optionally with extra keys per snap
-    (e.g. ``ParentDensity``, ``ParentDistance``) attached after reading gas.
 
-    Parameters
-    ----------
-    sink_data_snapwise : dict
-        ``{isnap: {"time": float, "data": structured_array, ...}, ...}``.
-    snaps : array-like of int or None, optional
-        Snapshot indices to include; default is sorted keys of ``sink_data_snapwise``.
-    require_ids_nonzero : bool, optional
-        If True, ignore sink records with ``ID == 0``.
+def valid_explosion_times(
+    explosion_time,
+    n_sne,
+    snap_time,
+    formation_time=np.nan,
+    max_sne=DEFAULT_SINK_MAX_SNE,
+):
+    """SN times from one sink row; drop padding and junk in the stored array."""
+    raw = np.asarray(explosion_time, dtype=np.float64).reshape(-1)[: int(max_sne)]
+    n = max(0, min(int(n_sne), len(raw)))
+    if n == 0:
+        return np.array([], dtype=np.float64)
 
-    Returns
-    -------
-    dict
-        ``sink_id ->`` dict with shared ``time`` and ``snaps`` arrays plus per-sink
-        series ``pos``, ``mass``, ``rho_parent``, ``d_parent`` (nan if missing) and
-        scalars ``formationTime``, ``formationMass``, ``first_snap``, ``first_index``.
+    t = raw[:n]
+    ok = np.isfinite(t) & (t > 0.0) & (t <= float(snap_time)) & (t < 1.0e6)
+    if np.isfinite(formation_time):
+        ok &= t >= float(formation_time) - 1e-9
+    t = t[ok]
+    if t.size == 0:
+        return np.array([], dtype=np.float64)
+    return np.unique(np.sort(t))
+
+
+def build_sink_data_sinkwise(
+    sink_data_snapwise,
+    snaps=None,
+    require_ids_nonzero=True,
+):
+    """Per-sink-ID tracks from {isnap: read_sink_snap_binary output}.
+
+    Each track has pos, mass, formationTime, etc. and sne_times (per snap index).
     """
     if snaps is None:
         snaps = np.array(sorted(sink_data_snapwise.keys()), dtype=int)
@@ -544,7 +506,7 @@ def build_sink_data_sinkwise(sink_data_snapwise, snaps=None, require_ids_nonzero
     sink_data_sinkwise = {}
     for sid in all_ids:
         sid = int(sid)
-        sink_data_sinkwise[sid] = {
+        entry = {
             "time": snap_t,
             "snaps": snaps,
             "pos": np.full((n, 3), np.nan, dtype=float),
@@ -555,7 +517,9 @@ def build_sink_data_sinkwise(sink_data_snapwise, snaps=None, require_ids_nonzero
             "formationMass": np.nan,
             "first_snap": None,
             "first_index": None,
+            "sne_times": np.empty(n, dtype=object),
         }
+        sink_data_sinkwise[sid] = entry
 
     for i, isnap in enumerate(snaps):
         rec = sink_data_snapwise[isnap]["data"]
@@ -587,5 +551,12 @@ def build_sink_data_sinkwise(sink_data_snapwise, snaps=None, require_ids_nonzero
                 tr["first_index"] = int(i)
                 tr["formationTime"] = float(np.asarray(rec["FormationTime"][j]).squeeze())
                 tr["formationMass"] = float(np.asarray(rec["FormationMass"][j]).squeeze())
+
+            tr["sne_times"][i] = valid_explosion_times(
+                rec["explosion_time"][j],
+                rec["N_sne"][j],
+                snap_t[i],
+                formation_time=float(rec["FormationTime"][j]),
+            )
 
     return sink_data_sinkwise

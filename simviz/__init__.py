@@ -1,6 +1,8 @@
 """Arepo-oriented plotting helpers (maps, LIC, projections)."""
 
 from .field_plots import (
+    adaptive_gaussian_blend_mass_map,
+    masked_fill_mass_map,
     create_lbrv_maps,
     find_xy_map,
     histogram_equalize,
@@ -21,6 +23,7 @@ from .field_plots import (
 from .projections import camera_frame, rotate_about_axis, rotate_to_bar_frame, rotate_xy, world_to_camera, xyz_to_lbr
 from .utils import (
     CONSTANTS,
+    build_sink_data_sinkwise,
     calc_bfield_uG,
     calc_co_quantities,
     calc_lambda_jeans,
@@ -29,12 +32,18 @@ from .utils import (
     mask_box,
     mask_cylinder,
     mask_galactic_window,
+    valid_explosion_times,
     read_sink_snap,
+    read_sink_snap_binary,
     read_snapshot_binary,
     read_snapshot_hdf5,
+    sink_snap_dtype,
 )
 
 __all__ = [
+    "adaptive_gaussian_blend_mass_map",
+    "masked_fill_mass_map",
+    "build_sink_data_sinkwise",
     "CONSTANTS",
     "calc_bfield_uG",
     "calc_co_quantities",
@@ -62,7 +71,10 @@ __all__ = [
     "rgba_intensity_with_lic_striations",
     "camera_frame",
     "rotate_about_axis",
+    "valid_explosion_times",
     "read_sink_snap",
+    "read_sink_snap_binary",
+    "sink_snap_dtype",
     "read_snapshot_binary",
     "read_snapshot_hdf5",
     "rotate_to_bar_frame",
