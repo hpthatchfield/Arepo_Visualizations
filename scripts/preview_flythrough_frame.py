@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""one flythrough preview frame"""
+"""one flythrough preview frame
+
+Renders a single frame using the exact same parameters and code paths as
+render_flythrough_movie.py, so the preview matches what the movie produces.
+"""
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -17,71 +20,17 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _PKG_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PKG_ROOT))
 
-from simviz.field_plots import project_surface_density_camera
-from simviz.projections import rotate_about_axis, rotate_to_bar_frame
-from simviz.utils import read_snapshot_hdf5
-
-# tune these
-SNAP_PREFIX = "phoenix_stinks_1Msun"
-FOV_X_DEG = 55.0
-NX, NY = 700, 700
-Z_NEAR, Z_FAR = 0.2, 30.0
-VMIN, VMAX = 5e-4, 2e1
-MASKED_FILL_SIGMAS = (0.8, 12.0)
-MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
-MASKED_FILL_PERCENTILES = (30.0, 88.0)
-MASKED_FILL_MASK_POWER = 2.0
-
-
-def snap_num_from_name(path, prefix=SNAP_PREFIX):
-    m = re.search(rf"{re.escape(prefix)}_(\d+)", Path(path).name, re.I)
-    if not m:
-        raise ValueError(f"expected {prefix}_<N>.hdf5, got {Path(path).name}")
-    return int(m.group(1))
-
-
-def load_gas_bar(snap_path):
-    data, header = read_snapshot_hdf5(snap_path, fields=("Coordinates", "Masses"))
-    t = float(header["Time"])
-    box = float(header["BoxSize"])
-    x, y, z = np.asarray(data["Coordinates"], dtype=np.float64).T
-    masses = np.asarray(data["Masses"], dtype=np.float64)
-    x -= box / 2.0
-    y -= box / 2.0
-    z -= box / 2.0
-    z0 = np.zeros_like(x)
-    x, y, _, _ = rotate_to_bar_frame(x, y, z0, z0, t)
-    return x, y, z, masses, header
-
-
-def camera_path(n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
-    theta = np.linspace(0, 2 * np.pi * n_turns, n_frames, endpoint=False)
-    radius = np.linspace(r_start, r_end, n_frames)
-    pts = np.column_stack([radius * np.cos(theta), radius * np.sin(theta), np.zeros(n_frames)])
-    pts = rotate_about_axis(pts, axis=(1.0, 1.0, 0.3), angle=np.radians(tilt_deg))
-    return pts
-
-
-def project_mass_map(x, y, z, masses, cam, smooth=True):
-    sigma, _ = project_surface_density_camera(
-        x,
-        y,
-        z,
-        masses,
-        camera_position=cam,
-        target=(0.0, 0.0, 0.0),
-        up_hint=(0.0, 0.0, 1.0),
-        fov_x_deg=FOV_X_DEG,
-        nx=NX,
-        ny=NY,
-        z_near=Z_NEAR,
-        z_far=Z_FAR,
-        masked_fill_sigmas=MASKED_FILL_SIGMAS if smooth else None,
-        masked_fill_weight_sigma_px=MASKED_FILL_WEIGHT_SIGMA_PX,
-        masked_fill_percentiles=MASKED_FILL_PERCENTILES,
-        masked_fill_mask_power=MASKED_FILL_MASK_POWER,
-    )
-    return sigma
+from scripts.render_flythrough_movie import (
+    SNAP_PREFIX,
+    VMAX,
+    VMIN,
+    camera_path,
+    color_limits,
+    load_gas_bar,
+    project_mass_map,
+    snap_num_from_name,
+    write_png,
+)
 
 
 def describe_map(sigma, label):
@@ -100,41 +49,6 @@ def describe_map(sigma, label):
         )
     else:
         print("  no positive pixels")
-
-
-def color_limits(sigma, vmin_floor=1e-6):
-    pos = sigma[sigma > 0]
-    if pos.size == 0:
-        return VMIN, VMAX
-    vmin = max(float(np.percentile(pos, 1)), vmin_floor)
-    vmax = float(np.percentile(pos, 99.5))
-    if vmax <= vmin:
-        vmax = vmin * 10.0
-    return vmin, vmax
-
-
-def write_png(sigma, out_path, vmin, vmax, title=None):
-    out = np.asarray(sigma, dtype=np.float64).copy()
-    out[~np.isfinite(out)] = vmin
-    out[out <= 0] = vmin
-
-    fig, ax = plt.subplots(1, 1, figsize=(6, 6), dpi=150)
-    ax.imshow(
-        out,
-        origin="lower",
-        extent=(-1, 1, -1, 1),
-        norm=colors.LogNorm(vmin=vmin, vmax=vmax),
-        cmap="inferno",
-        interpolation="nearest",
-    )
-    ax.set_xlabel("camera x")
-    ax.set_ylabel("camera y")
-    if title:
-        ax.set_title(title)
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
 
 
 def _write_compare_png(sigma_raw, sigma_smoothed, out_path, vmin, vmax):
@@ -162,7 +76,7 @@ def _write_compare_png(sigma_raw, sigma_smoothed, out_path, vmin, vmax):
     plt.close(fig)
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--snap", type=Path, help="one snapshot hdf5")
     parser.add_argument("--snap-dir", type=Path, help="dir with prefix_N.hdf5 files")
@@ -177,7 +91,13 @@ def main():
     parser.add_argument("--tilt-deg", type=float, default=35.0)
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=None)
-    parser.add_argument("--auto-scale", action="store_true")
+    parser.add_argument(
+        "--auto-scale",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="autoscale vmin/vmax from this frame's percentiles (on by default, "
+        "matches the movie); pass --no-auto-scale to use the fixed --vmin/--vmax",
+    )
     parser.add_argument(
         "--no-smooth",
         action="store_true",
@@ -188,6 +108,11 @@ def main():
         action="store_true",
         help="print stage-by-stage map stats and write a raw-vs-smoothed comparison PNG",
     )
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.snap is not None:

@@ -75,7 +75,7 @@ def camera_path(n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
     return pts
 
 
-def project_mass_map(x, y, z, masses, cam):
+def project_mass_map(x, y, z, masses, cam, smooth=True):
     sigma, _ = project_surface_density_camera(
         x,
         y,
@@ -89,7 +89,7 @@ def project_mass_map(x, y, z, masses, cam):
         ny=NY,
         z_near=Z_NEAR,
         z_far=Z_FAR,
-        masked_fill_sigmas=MASKED_FILL_SIGMAS,
+        masked_fill_sigmas=MASKED_FILL_SIGMAS if smooth else None,
         masked_fill_weight_sigma_px=MASKED_FILL_WEIGHT_SIGMA_PX,
         masked_fill_percentiles=MASKED_FILL_PERCENTILES,
         masked_fill_mask_power=MASKED_FILL_MASK_POWER,
