@@ -131,7 +131,7 @@ def write_png(sigma, out_path, vmin, vmax, title=None):
     plt.close(fig)
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--snap-dir", type=Path, required=True)
     parser.add_argument("--snap-prefix", default=SNAP_PREFIX)
@@ -161,10 +161,15 @@ def main():
     parser.add_argument(
         "--lock-color-scale",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="autoscale vmin/vmax from the first rendered frame, then hold fixed; "
-        "off by default so frames use the fixed --vmin/--vmax (matches preview defaults)",
+        default=True,
+        help="autoscale vmin/vmax from the first rendered frame, then hold fixed "
+        "(on by default); pass --no-lock-color-scale to use the fixed --vmin/--vmax",
     )
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     snap_paths = list_snaps(
