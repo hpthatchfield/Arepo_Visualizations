@@ -161,8 +161,9 @@ def main():
     parser.add_argument(
         "--lock-color-scale",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="autoscale vmin/vmax from the first rendered frame, then hold fixed",
+        default=False,
+        help="autoscale vmin/vmax from the first rendered frame, then hold fixed; "
+        "off by default so frames use the fixed --vmin/--vmax (matches preview defaults)",
     )
     args = parser.parse_args()
 

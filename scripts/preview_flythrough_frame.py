@@ -62,7 +62,7 @@ def camera_path(n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
     return pts
 
 
-def project_mass_map(x, y, z, masses, cam):
+def project_mass_map(x, y, z, masses, cam, smooth=True):
     sigma, _ = project_surface_density_camera(
         x,
         y,
@@ -76,12 +76,30 @@ def project_mass_map(x, y, z, masses, cam):
         ny=NY,
         z_near=Z_NEAR,
         z_far=Z_FAR,
-        masked_fill_sigmas=MASKED_FILL_SIGMAS,
+        masked_fill_sigmas=MASKED_FILL_SIGMAS if smooth else None,
         masked_fill_weight_sigma_px=MASKED_FILL_WEIGHT_SIGMA_PX,
         masked_fill_percentiles=MASKED_FILL_PERCENTILES,
         masked_fill_mask_power=MASKED_FILL_MASK_POWER,
     )
     return sigma
+
+
+def describe_map(sigma, label):
+    """Print stage stats useful for diagnosing washed-out frames."""
+    arr = np.asarray(sigma, dtype=np.float64)
+    finite = arr[np.isfinite(arr)]
+    pos = finite[finite > 0]
+    nonzero_frac = pos.size / arr.size if arr.size else 0.0
+    print(f"[{label}]")
+    print(f"  shape={arr.shape}  nonzero_frac={nonzero_frac:.3f}")
+    if pos.size:
+        pcts = np.percentile(pos, [1, 50, 99, 99.5])
+        print(
+            f"  positive: min={pos.min():.3g}  max={pos.max():.3g}  "
+            f"p1={pcts[0]:.3g}  p50={pcts[1]:.3g}  p99={pcts[2]:.3g}  p99.5={pcts[3]:.3g}"
+        )
+    else:
+        print("  no positive pixels")
 
 
 def color_limits(sigma, vmin_floor=1e-6):
@@ -119,6 +137,31 @@ def write_png(sigma, out_path, vmin, vmax, title=None):
     plt.close(fig)
 
 
+def _write_compare_png(sigma_raw, sigma_smoothed, out_path, vmin, vmax):
+    """Side-by-side raw vs smoothed map at the same color scale."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6), dpi=150)
+    for ax, data, label in (
+        (axes[0], sigma_raw, "raw histogram"),
+        (axes[1], sigma_smoothed, "masked_fill"),
+    ):
+        out = np.asarray(data, dtype=np.float64).copy()
+        out[~np.isfinite(out)] = vmin
+        out[out <= 0] = vmin
+        ax.imshow(
+            out,
+            origin="lower",
+            extent=(-1, 1, -1, 1),
+            norm=colors.LogNorm(vmin=vmin, vmax=vmax),
+            cmap="inferno",
+            interpolation="nearest",
+        )
+        ax.set_title(label)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--snap", type=Path, help="one snapshot hdf5")
@@ -135,6 +178,16 @@ def main():
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=None)
     parser.add_argument("--auto-scale", action="store_true")
+    parser.add_argument(
+        "--no-smooth",
+        action="store_true",
+        help="render the raw histogram (skip masked_fill) to isolate the smoothing stage",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="print stage-by-stage map stats and write a raw-vs-smoothed comparison PNG",
+    )
     args = parser.parse_args()
 
     if args.snap is not None:
@@ -167,10 +220,16 @@ def main():
     cam = path[args.frame_index % args.n_frames]
 
     print("projecting...")
-    sigma = project_mass_map(x, y, z, masses, cam)
+    sigma = project_mass_map(x, y, z, masses, cam, smooth=not args.no_smooth)
+
+    if args.debug:
+        sigma_raw = project_mass_map(x, y, z, masses, cam, smooth=False)
+        describe_map(sigma_raw, "raw histogram")
+        describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")
 
     if args.auto_scale:
         vmin, vmax = color_limits(sigma)
+        print(f"auto color scale: vmin={vmin:.4g}  vmax={vmax:.4g}")
     else:
         vmin = VMIN if args.vmin is None else args.vmin
         vmax = VMAX if args.vmax is None else args.vmax
@@ -179,6 +238,11 @@ def main():
     title = f"snap {snap_n}  frame {args.frame_index}  cam=({cam[0]:.2f},{cam[1]:.2f},{cam[2]:.2f})"
     write_png(sigma, out_path, vmin, vmax, title=title)
     print(f"wrote {out_path}")
+
+    if args.debug and not args.no_smooth:
+        cmp_path = Path(out_path).with_name(Path(out_path).stem + "_compare.png")
+        _write_compare_png(sigma_raw, sigma, cmp_path, vmin, vmax)
+        print(f"wrote {cmp_path}")
 
 
 if __name__ == "__main__":
