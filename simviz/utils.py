@@ -581,6 +581,9 @@ def validate_sink_gas_snap(
 
     report["ok"] = len(report["errors"]) == 0
     return report
+
+
+def attach_parent_fields_from_hdf5(sink_snap_out, filename):
     """Set ``ParentDensity`` / ``ParentDistance`` from nearest gas cell at sink positions.
 
     Reads ``PartType0/Coordinates`` and ``PartType0/Density`` from the gas snapshot,
