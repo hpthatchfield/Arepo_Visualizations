@@ -451,17 +451,145 @@ def read_sink_snap(filename, max_sne=2000, max_accretion_events=50, check_filesi
 
 DEFAULT_SINK_MAX_SNE = 2000
 DEFAULT_SINK_MAX_ACCRETION_EVENTS = 50
+DEFAULT_SINK_SNAP_TEMPLATE = "sink_snap_{snap}"
+DEFAULT_GAS_SNAP_PREFIX = "phoenix_stinks_1Msun"
 
 
-def attach_parent_fields_from_hdf5(sink_snap_out, filename):
-    """Set ``ParentDensity`` / ``ParentDistance`` on a snapwise entry from HDF5 PartType5.
+def gas_snap_path(gas_dir, isnap, prefix=DEFAULT_GAS_SNAP_PREFIX):
+    """Resolve gas HDF5 for snapshot index (tries padded and unpadded names)."""
+    from pathlib import Path
 
-    Matches ``sink_snap`` record ``ID`` to ``PartType5/ParticleIDs`` (same association
-    as Dani's notebooks and ``build_sink_data_sinkwise``). Arrays are per sink row in
-    the binary snapshot, ready for ``build_sink_data_sinkwise`` to copy into
-    ``rho_parent`` / ``d_parent`` tracks.
+    gas_dir = Path(gas_dir)
+    candidates = (
+        gas_dir / f"{prefix}_{int(isnap)}.hdf5",
+        gas_dir / f"{prefix}_{int(isnap):03d}.hdf5",
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def validate_sink_gas_snap(
+    snap_dir,
+    isnap,
+    gas_prefix=DEFAULT_GAS_SNAP_PREFIX,
+    sink_snap_template=DEFAULT_SINK_SNAP_TEMPLATE,
+    max_sne=DEFAULT_SINK_MAX_SNE,
+    max_accretion_events=DEFAULT_SINK_MAX_ACCRETION_EVENTS,
+    time_atol=1e-10,
+    n_spotcheck=5,
+):
+    """Check one sink_snap / gas HDF5 pair before a long batch load.
+
+    Returns a report dict with ``ok``, ``errors``, ``warnings``, timing, counts,
+    and a short ``spotcheck`` list of example sinks.
     """
     import h5py
+    from pathlib import Path
+
+    snap_dir = Path(snap_dir)
+    isnap = int(isnap)
+    report = {
+        "ok": False,
+        "isnap": isnap,
+        "errors": [],
+        "warnings": [],
+        "spotcheck": [],
+    }
+
+    sink_path = snap_dir / sink_snap_template.format(snap=isnap)
+    gas_path = gas_snap_path(snap_dir, isnap, prefix=gas_prefix)
+    report["sink_path"] = str(sink_path)
+    report["gas_path"] = str(gas_path) if gas_path is not None else None
+
+    if not sink_path.is_file():
+        report["errors"].append(f"missing sink snap: {sink_path}")
+        return report
+    if gas_path is None:
+        report["errors"].append(f"no gas HDF5 for snap {isnap} (prefix={gas_prefix})")
+        return report
+
+    entry = read_sink_snap_binary(
+        sink_path,
+        max_sne=max_sne,
+        max_accretion_events=max_accretion_events,
+    )
+    t_sink = float(entry["time"])
+    report["t_sink"] = t_sink
+
+    with h5py.File(gas_path, "r") as fhandle:
+        if "Header" not in fhandle or "Time" not in fhandle["Header"].attrs:
+            report["errors"].append("gas HDF5 missing Header/Time")
+            return report
+        t_gas = float(fhandle["Header"].attrs["Time"])
+        report["t_gas"] = t_gas
+        report["dt_time"] = abs(t_sink - t_gas)
+
+        if "PartType0" not in fhandle or "Coordinates" not in fhandle["PartType0"]:
+            report["errors"].append("gas HDF5 missing PartType0/Coordinates")
+            return report
+        report["n_gas_cells"] = int(fhandle["PartType0"]["Coordinates"].shape[0])
+
+    if not np.isclose(t_sink, t_gas, rtol=0.0, atol=time_atol):
+        report["errors"].append(
+            f"time mismatch: sink={t_sink} gas={t_gas} dt={report['dt_time']}"
+        )
+
+    attach_parent_fields_from_hdf5(entry, gas_path)
+    rec = entry["data"]
+    rho = np.asarray(entry["ParentDensity"], dtype=np.float64)
+    dist = np.asarray(entry["ParentDistance"], dtype=np.float64)
+    n_sinks = int(rec.size)
+    n_finite = int(np.isfinite(rho).sum())
+    report["n_sinks"] = n_sinks
+    report["n_finite_rho"] = n_finite
+
+    if n_sinks == 0:
+        report["warnings"].append("sink snap has zero sinks")
+    elif n_finite == 0:
+        report["errors"].append("no finite gas density at any sink position")
+    elif n_finite < n_sinks:
+        report["warnings"].append(f"only {n_finite}/{n_sinks} sinks have finite gas rho")
+
+    shown = 0
+    for j in range(n_sinks):
+        if shown >= int(n_spotcheck):
+            break
+        sid = int(rec["ID"][j])
+        if sid == 0 or not np.isfinite(rho[j]):
+            continue
+        sne = valid_explosion_times(
+            rec["explosion_time"][j],
+            rec["N_sne"][j],
+            t_sink,
+            formation_time=float(rec["FormationTime"][j]),
+            max_sne=max_sne,
+        )
+        report["spotcheck"].append(
+            {
+                "id": sid,
+                "mass": float(rec["Mass"][j]),
+                "formation_time": float(rec["FormationTime"][j]),
+                "rho_gas": float(rho[j]),
+                "d_nearest": float(dist[j]),
+                "n_sne": int(rec["N_sne"][j]),
+                "n_sne_valid": int(sne.size),
+            }
+        )
+        shown += 1
+
+    report["ok"] = len(report["errors"]) == 0
+    return report
+    """Set ``ParentDensity`` / ``ParentDistance`` from nearest gas cell at sink positions.
+
+    Reads ``PartType0/Coordinates`` and ``PartType0/Density`` from the gas snapshot,
+    then matches each sink ``Pos`` from the ``sink_snap`` binary record. Arrays are
+    per sink row, ready for ``build_sink_data_sinkwise`` to copy into ``rho_parent``
+    and ``d_parent`` tracks.
+    """
+    import h5py
+    from scipy.spatial import cKDTree
 
     filename = os.fspath(filename)
     rec = sink_snap_out["data"]
@@ -469,36 +597,41 @@ def attach_parent_fields_from_hdf5(sink_snap_out, filename):
     rho = np.full(n_sink, np.nan, dtype=np.float64)
     dist = np.full(n_sink, np.nan, dtype=np.float64)
 
+    if n_sink == 0:
+        sink_snap_out["ParentDensity"] = rho
+        sink_snap_out["ParentDistance"] = dist
+        return sink_snap_out
+
+    sink_pos = np.asarray(rec["Pos"], dtype=np.float64).reshape(n_sink, 3)
+
     with h5py.File(filename, "r") as fhandle:
-        if "PartType5" not in fhandle:
+        if "PartType0" not in fhandle:
             sink_snap_out["ParentDensity"] = rho
             sink_snap_out["ParentDistance"] = dist
             return sink_snap_out
 
-        grp = fhandle["PartType5"]
-        if "ParticleIDs" not in grp or "ParentDensity" not in grp:
+        grp = fhandle["PartType0"]
+        if "Coordinates" not in grp or "Density" not in grp:
             sink_snap_out["ParentDensity"] = rho
             sink_snap_out["ParentDistance"] = dist
             return sink_snap_out
 
-        pids = np.asarray(grp["ParticleIDs"][:], dtype=np.uint64)
-        rho_pt5 = np.asarray(grp["ParentDensity"][:], dtype=np.float64)
-        dist_pt5 = None
-        if "ParentDistance" in grp:
-            dist_pt5 = np.asarray(grp["ParentDistance"][:], dtype=np.float64)
-        pid_to_idx = {int(pid): i for i, pid in enumerate(pids)}
+        gas_coords = np.asarray(grp["Coordinates"][:], dtype=np.float64)
+        gas_rho = np.asarray(grp["Density"][:], dtype=np.float64)
+        box = float(fhandle["Header"].attrs.get("BoxSize", 0.0))
 
-        sink_ids = np.asarray(rec["ID"], dtype=np.uint64)
-        for j in range(n_sink):
-            sid = int(sink_ids[j])
-            if sid == 0:
-                continue
-            idx = pid_to_idx.get(sid)
-            if idx is None:
-                continue
-            rho[j] = float(rho_pt5[idx])
-            if dist_pt5 is not None:
-                dist[j] = float(dist_pt5[idx])
+    if gas_coords.size == 0 or gas_rho.size == 0:
+        sink_snap_out["ParentDensity"] = rho
+        sink_snap_out["ParentDistance"] = dist
+        return sink_snap_out
+
+    if box > 0.0:
+        tree = cKDTree(gas_coords, boxsize=box)
+    else:
+        tree = cKDTree(gas_coords)
+    d_nearest, idx = tree.query(sink_pos)
+    rho = np.asarray(gas_rho[idx], dtype=np.float64)
+    dist = np.asarray(d_nearest, dtype=np.float64)
 
     sink_snap_out["ParentDensity"] = rho
     sink_snap_out["ParentDistance"] = dist

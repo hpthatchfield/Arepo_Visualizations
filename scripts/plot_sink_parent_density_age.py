@@ -18,28 +18,44 @@ sys.path.insert(0, str(_PKG_ROOT))
 
 from simviz.utils import (
     CONSTANTS,
+    DEFAULT_GAS_SNAP_PREFIX,
     attach_parent_fields_from_hdf5,
     build_sink_data_sinkwise,
+    gas_snap_path,
     read_sink_snap_binary,
+    validate_sink_gas_snap,
 )
 
 SINK_SNAP_TEMPLATE = "sink_snap_{snap}"
-GAS_SNAP_PREFIX = "phoenix_stinks_1Msun"
+GAS_SNAP_PREFIX = DEFAULT_GAS_SNAP_PREFIX
 DEFAULT_MAX_SNE = 2000
 DEFAULT_MAX_ACCRETION = 50
 DEFAULT_CODE_TIME_TO_MYR = 98.7
 
 
-def gas_snap_path(gas_dir, isnap, prefix=GAS_SNAP_PREFIX):
-    """Resolve gas HDF5 for snapshot index (tries padded and unpadded names)."""
-    candidates = (
-        gas_dir / f"{prefix}_{isnap}.hdf5",
-        gas_dir / f"{prefix}_{isnap:03d}.hdf5",
-    )
-    for path in candidates:
-        if path.is_file():
-            return path
-    return None
+def print_validation_report(report):
+    """Print one-snap validation results to stdout."""
+    print(f"validate snap {report['isnap']}")
+    print(f"  sink: {report.get('sink_path')}")
+    print(f"  gas:  {report.get('gas_path')}")
+    if "t_sink" in report:
+        print(f"  time sink binary: {report['t_sink']}")
+        print(f"  time gas header:  {report['t_gas']}  (dt={report['dt_time']})")
+    if "n_gas_cells" in report:
+        print(f"  gas cells: {report['n_gas_cells']:,}")
+    if "n_sinks" in report:
+        print(f"  sinks: {report['n_sinks']:,}   finite gas rho: {report['n_finite_rho']:,}")
+    for msg in report.get("warnings", []):
+        print(f"  warn: {msg}")
+    for msg in report.get("errors", []):
+        print(f"  ERROR: {msg}")
+    for row in report.get("spotcheck", []):
+        print(
+            f"  id={row['id']}  mass={row['mass']:.4g}  "
+            f"rho={row['rho_gas']:.4g}  d={row['d_nearest']:.4g}  "
+            f"n_sne={row['n_sne']} ({row['n_sne_valid']} valid)"
+        )
+    print("ok" if report.get("ok") else "FAILED")
 
 
 def age_since_formation_myr(snap_time, formation_time, code_time_to_myr):
@@ -169,7 +185,7 @@ def plot_hist2d_with_sne(
 ):
     """Draw density–age 2D histogram and overlay SNe markers."""
     if ages.size == 0:
-        raise ValueError("no samples for histogram (missing ParentDensity?)")
+        raise ValueError("no samples for histogram (missing gas density at sinks?)")
 
     if age_lim is None:
         age_lim = (0.0, float(np.nanmax(ages)) * 1.02 + 1e-6)
@@ -226,6 +242,13 @@ def main():
         required=True,
         help="directory with sink_snap_<N> and <prefix>_<N>.hdf5",
     )
+    parser.add_argument(
+        "--validate-snap",
+        type=int,
+        default=None,
+        metavar="N",
+        help="check one snap (times, gas rho at sinks) and exit",
+    )
     parser.add_argument("--gas-prefix", default=GAS_SNAP_PREFIX)
     parser.add_argument("--snap-first", type=int, default=500)
     parser.add_argument("--snap-last", type=int, default=1000)
@@ -243,6 +266,17 @@ def main():
     parser.add_argument("-o", "--output", type=Path, default=Path("sink_rho_vs_age.png"))
     args = parser.parse_args()
 
+    if args.validate_snap is not None:
+        report = validate_sink_gas_snap(
+            args.snap_dir,
+            args.validate_snap,
+            gas_prefix=args.gas_prefix,
+            max_sne=args.max_sne,
+            max_accretion_events=args.max_accretion_events,
+        )
+        print_validation_report(report)
+        sys.exit(0 if report["ok"] else 1)
+
     snapwise = load_snap_range(
         args.snap_dir,
         args.snap_first,
@@ -258,7 +292,7 @@ def main():
     print(f"{len(tracks)} sink tracks")
     n_rho = sum(int(np.isfinite(tr["rho_parent"]).sum()) for tr in tracks.values())
     n_tot = sum(tr["rho_parent"].size for tr in tracks.values())
-    print(f"PartType5 parent density on {n_rho:,} / {n_tot:,} track points")
+    print(f"gas density at sinks on {n_rho:,} / {n_tot:,} track points")
 
     ages, log_rho = collect_density_age_samples(
         tracks, args.code_time_to_myr, use_cgs=args.density_cgs
