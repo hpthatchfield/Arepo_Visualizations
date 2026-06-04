@@ -32,6 +32,7 @@ MASKED_FILL_SIGMAS = (0.8, 12.0)
 MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
 MASKED_FILL_PERCENTILES = (30.0, 88.0)
 MASKED_FILL_MASK_POWER = 2.0
+CODE_TIME_TO_MYR = 98.7
 
 
 def snap_num_from_name(path, prefix=SNAP_PREFIX):
@@ -75,7 +76,73 @@ def camera_path(n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
     return pts
 
 
-def project_mass_map(x, y, z, masses, cam, smooth=True):
+# (fraction, radius, azimuth_deg, elevation_deg); elevation is the angle above the
+# disk plane (0 = edge-on / l-b-like, +90 = top-down, negative = below the plane).
+DEFAULT_CINEMATIC_KEYFRAMES = (
+    (0.00, 18.0, 0.0, 20.0),     # start: slight angle, far out
+    (0.25, 8.0, 90.0, 20.0),     # slow zoom-in toward the GC
+    (0.55, 8.0, 270.0, 75.0),    # orbit around, rising to near top-down
+    (0.80, 10.0, 360.0, 0.0),    # dip down to edge-on (l-b view)
+    (1.00, 18.0, 360.0, -30.0),  # continue below while zooming back out
+)
+
+
+def _smooth_interp(t, fracs, values):
+    """Piecewise interpolation with smoothstep easing in/out at each keyframe."""
+    t = np.asarray(t, dtype=np.float64)
+    fracs = np.asarray(fracs, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+    out = np.empty_like(t)
+    for j in range(len(fracs) - 1):
+        lo, hi = fracs[j], fracs[j + 1]
+        if j == len(fracs) - 2:
+            m = (t >= lo) & (t <= hi)
+        else:
+            m = (t >= lo) & (t < hi)
+        span = hi - lo
+        u = (t[m] - lo) / span if span > 0 else np.zeros(int(np.count_nonzero(m)))
+        s = u * u * (3.0 - 2.0 * u)
+        out[m] = values[j] + (values[j + 1] - values[j]) * s
+    return out
+
+
+def _camera_up(pos):
+    """Galactic-north-ish up vector that stays valid near (but not at) the poles."""
+    pos = np.asarray(pos, dtype=np.float64)
+    norm = np.linalg.norm(pos)
+    if norm == 0:
+        return np.array([0.0, 0.0, 1.0])
+    forward = -pos / norm
+    world_z = np.array([0.0, 0.0, 1.0])
+    up = world_z - np.dot(world_z, forward) * forward
+    if np.linalg.norm(up) < 1e-3:
+        alt = np.array([0.0, 1.0, 0.0])
+        up = alt - np.dot(alt, forward) * forward
+    return up / np.linalg.norm(up)
+
+
+def cinematic_camera_path(n_frames, keyframes=DEFAULT_CINEMATIC_KEYFRAMES):
+    """Multi-phase keyframed path: zoom-in, orbit from above, dip to edge-on, exit below.
+
+    Each keyframe is ``(fraction, radius, azimuth_deg, elevation_deg)``. Returns
+    ``(positions (N, 3), ups (N, 3))`` with the camera always facing the origin.
+    """
+    keyframes = np.asarray(keyframes, dtype=np.float64)
+    fracs = keyframes[:, 0]
+    t = np.linspace(0.0, 1.0, n_frames)
+    r = _smooth_interp(t, fracs, keyframes[:, 1])
+    az = np.radians(_smooth_interp(t, fracs, keyframes[:, 2]))
+    el = np.radians(_smooth_interp(t, fracs, keyframes[:, 3]))
+    pts = np.column_stack([
+        r * np.cos(el) * np.cos(az),
+        r * np.cos(el) * np.sin(az),
+        r * np.sin(el),
+    ])
+    ups = np.array([_camera_up(p) for p in pts])
+    return pts, ups
+
+
+def project_mass_map(x, y, z, masses, cam, smooth=True, up=(0.0, 0.0, 1.0)):
     sigma, _ = project_surface_density_camera(
         x,
         y,
@@ -83,7 +150,7 @@ def project_mass_map(x, y, z, masses, cam, smooth=True):
         masses,
         camera_position=cam,
         target=(0.0, 0.0, 0.0),
-        up_hint=(0.0, 0.0, 1.0),
+        up_hint=up,
         fov_x_deg=FOV_X_DEG,
         nx=NX,
         ny=NY,
@@ -109,7 +176,7 @@ def color_limits(sigma, vmin_floor=1e-6):
     return vmin, vmax
 
 
-def write_png(sigma, out_path, vmin, vmax, title=None):
+def write_png(sigma, out_path, vmin, vmax, title=None, time_myr=None):
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
     out[out <= 0] = vmin
@@ -123,6 +190,9 @@ def write_png(sigma, out_path, vmin, vmax, title=None):
         cmap="inferno",
         interpolation="nearest",
     )
+    if time_myr is not None:
+        ax.text(0.02, 0.98, f"{time_myr:.1f} Myr", transform=ax.transAxes,
+                color="white", ha="left", va="top", fontsize=12)
     if title:
         ax.set_title(title)
     out_path = Path(out_path)
@@ -148,6 +218,14 @@ def build_parser():
         help="only use snaps with this number or lower in the filename",
     )
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("flythrough_frames"))
+    parser.add_argument(
+        "--path",
+        choices=("orbit", "cinematic"),
+        default="orbit",
+        help="camera path: 'orbit' (tilted circle, default) or 'cinematic' "
+        "(keyframed zoom-in / orbit from above / dip to edge-on / exit below); "
+        "cinematic ignores --r-start/--r-end/--n-turns/--tilt-deg",
+    )
     parser.add_argument("--n-frames", type=int, default=300)
     parser.add_argument("--frames-per-snap", type=int, default=5)
     parser.add_argument("--frame-start", type=int, default=0)
@@ -189,13 +267,19 @@ def main():
             f"({len(snap_paths)} after filter); last snap will repeat"
         )
 
-    cameras = camera_path(
-        args.n_frames,
-        r_start=args.r_start,
-        r_end=args.r_end,
-        n_turns=args.n_turns,
-        tilt_deg=args.tilt_deg,
-    )
+    if args.path == "cinematic":
+        cameras, ups = cinematic_camera_path(args.n_frames)
+        print("camera path: cinematic (keyframed); "
+              "--r-start/--r-end/--n-turns/--tilt-deg ignored")
+    else:
+        cameras = camera_path(
+            args.n_frames,
+            r_start=args.r_start,
+            r_end=args.r_end,
+            n_turns=args.n_turns,
+            tilt_deg=args.tilt_deg,
+        )
+        ups = None
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     snap_lo = snap_num_from_name(snap_paths[0], args.snap_prefix)
@@ -221,7 +305,8 @@ def main():
             cached = sidx
 
         cam = cameras[i]
-        sigma = project_mass_map(x, y, z, masses, cam)
+        up = (0.0, 0.0, 1.0) if ups is None else ups[i]
+        sigma = project_mass_map(x, y, z, masses, cam, up=up)
         if args.lock_color_scale and not scale_locked:
             vmin, vmax = color_limits(sigma)
             scale_locked = True
@@ -229,7 +314,8 @@ def main():
 
         out_path = args.output_dir / f"frame_{i:04d}.png"
         title = f"frame {i:04d}  snap {snap_num_from_name(snap_paths[sidx], args.snap_prefix)}"
-        write_png(sigma, out_path, vmin, vmax, title=title)
+        write_png(sigma, out_path, vmin, vmax, title=title,
+                  time_myr=float(header["Time"]) * CODE_TIME_TO_MYR)
 
         if (i - args.frame_start) % 10 == 0:
             print(f"  wrote {out_path.name}")

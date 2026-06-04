@@ -21,10 +21,12 @@ _PKG_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PKG_ROOT))
 
 from scripts.render_flythrough_movie import (
+    CODE_TIME_TO_MYR,
     SNAP_PREFIX,
     VMAX,
     VMIN,
     camera_path,
+    cinematic_camera_path,
     color_limits,
     load_gas_bar,
     project_mass_map,
@@ -84,6 +86,13 @@ def build_parser():
     parser.add_argument("--snap-prefix", default=SNAP_PREFIX)
     parser.add_argument("--frame-index", type=int, default=0)
     parser.add_argument("--n-frames", type=int, default=300)
+    parser.add_argument(
+        "--path",
+        choices=("orbit", "cinematic"),
+        default="orbit",
+        help="camera path: 'orbit' (default) or 'cinematic' (keyframed); "
+        "cinematic ignores --r-start/--r-end/--n-turns/--tilt-deg",
+    )
     parser.add_argument("-o", "--output", type=Path, default=None)
     parser.add_argument("--r-start", type=float, default=12.0)
     parser.add_argument("--r-end", type=float, default=6.0)
@@ -135,20 +144,26 @@ def main():
     x, y, z, masses, header = load_gas_bar(snap_path)
     print(f"  N_gas = {x.size:,}  Time = {header['Time']:.6g}")
 
-    path = camera_path(
-        args.n_frames,
-        r_start=args.r_start,
-        r_end=args.r_end,
-        n_turns=args.n_turns,
-        tilt_deg=args.tilt_deg,
-    )
-    cam = path[args.frame_index % args.n_frames]
+    if args.path == "cinematic":
+        path, ups = cinematic_camera_path(args.n_frames)
+    else:
+        path = camera_path(
+            args.n_frames,
+            r_start=args.r_start,
+            r_end=args.r_end,
+            n_turns=args.n_turns,
+            tilt_deg=args.tilt_deg,
+        )
+        ups = None
+    idx = args.frame_index % args.n_frames
+    cam = path[idx]
+    up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
 
     print("projecting...")
-    sigma = project_mass_map(x, y, z, masses, cam, smooth=not args.no_smooth)
+    sigma = project_mass_map(x, y, z, masses, cam, smooth=not args.no_smooth, up=up)
 
     if args.debug:
-        sigma_raw = project_mass_map(x, y, z, masses, cam, smooth=False)
+        sigma_raw = project_mass_map(x, y, z, masses, cam, smooth=False, up=up)
         describe_map(sigma_raw, "raw histogram")
         describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")
 
@@ -161,7 +176,8 @@ def main():
 
     snap_n = snap_num_from_name(snap_path, prefix=args.snap_prefix)
     title = f"snap {snap_n}  frame {args.frame_index}  cam=({cam[0]:.2f},{cam[1]:.2f},{cam[2]:.2f})"
-    write_png(sigma, out_path, vmin, vmax, title=title)
+    write_png(sigma, out_path, vmin, vmax, title=title,
+              time_myr=float(header["Time"]) * CODE_TIME_TO_MYR)
     print(f"wrote {out_path}")
 
     if args.debug and not args.no_smooth:
