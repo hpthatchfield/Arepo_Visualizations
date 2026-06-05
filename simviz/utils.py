@@ -748,3 +748,119 @@ def build_sink_data_sinkwise(
             )
 
     return sink_data_sinkwise
+
+
+def list_sink_snaps_in_range(
+    snap_dir,
+    snap_first,
+    snap_last,
+    gas_prefix=DEFAULT_GAS_SNAP_PREFIX,
+    sink_snap_template=DEFAULT_SINK_SNAP_TEMPLATE,
+):
+    """Snapshot indices in [snap_first, snap_last] with sink binary and gas HDF5."""
+    from pathlib import Path
+
+    snap_dir = Path(snap_dir)
+    out = []
+    for isnap in range(int(snap_first), int(snap_last) + 1):
+        sink_path = snap_dir / sink_snap_template.format(snap=isnap)
+        if not sink_path.is_file():
+            continue
+        if gas_snap_path(snap_dir, isnap, prefix=gas_prefix) is None:
+            continue
+        out.append(int(isnap))
+    return out
+
+
+def init_streaming_sink_tracks(snaps):
+    """Empty per-sink track store for incremental one-snap updates."""
+    snaps = np.asarray(snaps, dtype=int)
+    return {
+        "snaps": snaps,
+        "snap_t": np.full(snaps.size, np.nan, dtype=np.float64),
+        "tracks": {},
+    }
+
+
+def _new_sink_track(n_snaps, snaps, snap_t):
+    """Allocate one sink track aligned with the shared snap axis."""
+    return {
+        "time": snap_t,
+        "snaps": snaps,
+        "pos": np.full((n_snaps, 3), np.nan, dtype=np.float64),
+        "mass": np.full(n_snaps, np.nan, dtype=np.float64),
+        "rho_parent": np.full(n_snaps, np.nan, dtype=np.float64),
+        "d_parent": np.full(n_snaps, np.nan, dtype=np.float64),
+        "formationTime": np.nan,
+        "formationMass": np.nan,
+        "first_snap": None,
+        "first_index": None,
+        "sne_times": np.empty(n_snaps, dtype=object),
+    }
+
+
+def append_snap_to_sink_tracks(
+    store,
+    isnap,
+    entry,
+    max_sne=DEFAULT_SINK_MAX_SNE,
+    require_ids_nonzero=True,
+):
+    """Merge one snap into a streaming track store (mutates ``store`` in place)."""
+    snaps = store["snaps"]
+    snap_t = store["snap_t"]
+    isnap = int(isnap)
+    snap_index = int(np.where(snaps == isnap)[0][0])
+
+    snap_t[snap_index] = float(entry["time"])
+    rec = entry["data"]
+    ids = np.asarray(rec["ID"], dtype=np.uint64)
+    rho = entry.get("ParentDensity", None)
+    dist = entry.get("ParentDistance", None)
+    tracks = store["tracks"]
+    n_snaps = int(snaps.size)
+
+    if require_ids_nonzero:
+        id_to_row = {int(sid): j for j, sid in enumerate(ids) if sid != 0}
+    else:
+        id_to_row = {int(sid): j for j, sid in enumerate(ids)}
+
+    for sid, j in id_to_row.items():
+        tr = tracks.get(sid)
+        if tr is None:
+            tr = _new_sink_track(n_snaps, snaps, snap_t)
+            tracks[sid] = tr
+
+        tr["pos"][snap_index, :] = np.asarray(rec["Pos"][j], dtype=np.float64).reshape(3)
+        tr["mass"][snap_index] = float(rec["Mass"][j])
+        if rho is not None:
+            tr["rho_parent"][snap_index] = float(rho[j])
+        if dist is not None:
+            tr["d_parent"][snap_index] = float(dist[j])
+
+        if tr["first_snap"] is None:
+            tr["first_snap"] = isnap
+            tr["first_index"] = snap_index
+            tr["formationTime"] = float(np.asarray(rec["FormationTime"][j]).squeeze())
+            tr["formationMass"] = float(np.asarray(rec["FormationMass"][j]).squeeze())
+
+        tr["sne_times"][snap_index] = valid_explosion_times(
+            rec["explosion_time"][j],
+            rec["N_sne"][j],
+            snap_t[snap_index],
+            formation_time=float(rec["FormationTime"][j]),
+            max_sne=max_sne,
+        )
+
+    return store
+
+
+def nearest_snap_index_for_time(times, t_query):
+    """Index of ``times`` closest to ``t_query`` (ignores NaN entries)."""
+    t = np.asarray(times, dtype=np.float64)
+    ok = np.isfinite(t)
+    if not np.any(ok):
+        return None
+    idx_ok = np.where(ok)[0]
+    j = int(np.argmin(np.abs(t[ok] - float(t_query))))
+    return int(idx_ok[j])

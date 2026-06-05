@@ -1,0 +1,117 @@
+"""tests for annoying functions that aren't really working how I want them to."""
+
+import numpy as np
+
+from simviz.field_plots import (
+    adaptive_gaussian_blend_mass_map,
+    masked_fill_mass_map,
+    project_surface_density_camera,
+)
+
+
+def test_adaptive_gaussian_blend_mass_map():
+    rng = np.random.default_rng(1)
+    sigma = rng.random((32, 32)) * 1e-3
+    sigma[10:20, 10:20] += 10.0
+    out = adaptive_gaussian_blend_mass_map(
+        sigma, sigma_sharp_px=0.5, sigma_smooth_px=2.0, weight_sigma_px=0.5
+    )
+    assert out.shape == sigma.shape
+    assert np.all(np.isfinite(out))
+
+
+def test_project_surface_density_camera_smooth_sigma():
+    rng = np.random.default_rng(0)
+    n = 400
+    x = rng.uniform(-5.0, 5.0, n)
+    y = rng.uniform(-5.0, 5.0, n)
+    z = rng.uniform(1.0, 20.0, n)
+    m = rng.uniform(0.01, 1.0, n)
+    cam = np.array([8.0, 4.0, -15.0])
+
+    s0, _ = project_surface_density_camera(
+        x, y, z, m, camera_position=cam, nx=48, ny=48, z_far=100.0, smooth_sigma_px=None
+    )
+    s1, _ = project_surface_density_camera(
+        x, y, z, m, camera_position=cam, nx=48, ny=48, z_far=100.0, smooth_sigma_px=1.5
+    )
+    assert s0.shape == s1.shape == (48, 48)
+    assert np.all(np.isfinite(s1))
+
+
+def test_masked_fill_mass_map():
+    rng = np.random.default_rng(3)
+    sigma = rng.random((32, 32)) * 1e-3
+    sigma[10:20, 10:20] += 10.0
+    out = masked_fill_mass_map(
+        sigma, sigma_fill_px=4.0, sigma_sharp_px=0.0, weight_sigma_px=0.5
+    )
+    assert out.shape == sigma.shape
+    assert np.all(np.isfinite(out))
+    assert np.all(out >= 0.0)
+    assert out[15, 15] > out[0, 0]
+
+
+def test_masked_fill_mass_map_mask_power_runs():
+    sigma = np.full((32, 32), 1e-4, dtype=np.float64)
+    sigma[16, 16] = 1e-2
+    out = masked_fill_mass_map(
+        sigma,
+        sigma_fill_px=6.0,
+        sigma_sharp_px=0.0,
+        weight_sigma_px=1.0,
+        percentiles=(20.0, 85.0),
+        mask_power=2.0,
+    )
+    assert out.shape == sigma.shape
+    assert np.all(np.isfinite(out))
+
+
+def test_project_surface_density_camera_masked_fill():
+    rng = np.random.default_rng(4)
+    n = 400
+    x = rng.uniform(-5.0, 5.0, n)
+    y = rng.uniform(-5.0, 5.0, n)
+    z = rng.uniform(1.0, 20.0, n)
+    m = rng.uniform(0.01, 1.0, n)
+    cam = np.array([8.0, 4.0, -15.0])
+
+    s_mask, _ = project_surface_density_camera(
+        x,
+        y,
+        z,
+        m,
+        camera_position=cam,
+        nx=48,
+        ny=48,
+        z_far=100.0,
+        masked_fill_sigmas=(0.5, 3.0),
+        masked_fill_weight_sigma_px=0.5,
+    )
+    assert s_mask.shape == (48, 48)
+    assert np.all(np.isfinite(s_mask))
+
+
+def test_project_surface_density_camera_adaptive_sigmas():
+    rng = np.random.default_rng(2)
+    n = 400
+    x = rng.uniform(-5.0, 5.0, n)
+    y = rng.uniform(-5.0, 5.0, n)
+    z = rng.uniform(1.0, 20.0, n)
+    m = rng.uniform(0.01, 1.0, n)
+    cam = np.array([8.0, 4.0, -15.0])
+
+    s_adapt, _ = project_surface_density_camera(
+        x,
+        y,
+        z,
+        m,
+        camera_position=cam,
+        nx=48,
+        ny=48,
+        z_far=100.0,
+        adaptive_smooth_sigmas=(0.8, 2.5),
+        adaptive_weight_sigma_px=0.5,
+    )
+    assert s_adapt.shape == (48, 48)
+    assert np.all(np.isfinite(s_adapt))

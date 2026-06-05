@@ -5,11 +5,13 @@ Utilities for plotting AREPO snapshots: B-field maps (Stokes parameters, LIC tex
 ## Install
 
 ```bash
-cd simviz   # directory that contains pyproject.toml
+cd Arepo_Visualizations   # repository root (contains pyproject.toml)
 pip install -e .
 ```
 
 Dependencies: NumPy, Matplotlib, h5py, SciPy (see `requirements.txt`)
+
+Portable paths (repo root, `sample_snaps/`, etc.) live in `simviz.paths`. CMZ simulation data outside the repo defaults to `~/Research/Archive/Old_Code/arepo_CMZ/TS_2020`; override with `SIMVIZ_CMZ_DATA_DIR` if yours lives elsewhere.
 
 ## Examples
 
