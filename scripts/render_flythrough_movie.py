@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""flythrough png sequence from snapshot hdf5 files"""
+"""Render a fly-through PNG sequence from snapshot HDF5 files.
+
+Progress is printed to stdout with ``flush=True`` so lines appear immediately
+when run under SLURM, SSH, or piped to a log. Use ``python -u`` if output still
+looks buffered. Typical phases:
+
+1. Startup banner (snap range, camera path, output dir)
+2. Per-snapshot load lines with load time and particle count
+3. Rolling frame progress (``--progress-every N``) with elapsed time and ETA
+4. Final ``done in ...`` summary
+
+Encode frames with ffmpeg, e.g.::
+
+    ffmpeg -y -framerate 24 -i flythrough_frames/frame_%04d.png \\
+        -c:v libx264 -pix_fmt yuv420p flythrough.mp4
+"""
 
 import argparse
 import re
@@ -33,6 +48,20 @@ MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
 MASKED_FILL_PERCENTILES = (30.0, 88.0)
 MASKED_FILL_MASK_POWER = 2.0
 CODE_TIME_TO_MYR = 98.7
+
+
+def _log(msg=""):
+    print(msg, flush=True)
+
+
+def format_progress_line(*, done, total, frame_index, snap_number, elapsed_s):
+    """One-line progress summary for a rendered frame."""
+    pct = 100.0 * done / total if total else 0.0
+    eta_s = elapsed_s / done * (total - done) if done > 0 else 0.0
+    return (
+        f"[{done}/{total} {pct:5.1f}%]  frame {frame_index:04d}  snap {snap_number}  "
+        f"elapsed={elapsed_s / 60:.1f}m  eta={eta_s / 60:.1f}m"
+    )
 
 
 def snap_num_from_name(path, prefix=SNAP_PREFIX):
@@ -243,6 +272,12 @@ def build_parser():
         help="autoscale vmin/vmax from the first rendered frame, then hold fixed "
         "(on by default); pass --no-lock-color-scale to use the fixed --vmin/--vmax",
     )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=1,
+        help="print a progress line every N rendered frames (default: 1)",
+    )
     return parser
 
 
@@ -258,19 +293,22 @@ def main():
     )
     frame_end = args.n_frames if args.frame_end is None else args.frame_end
     if frame_end <= args.frame_start:
-        print("ERROR: frame-end must be > frame-start")
+        _log("ERROR: frame-end must be > frame-start")
+        sys.exit(1)
+    if args.progress_every < 1:
+        _log("ERROR: --progress-every must be >= 1")
         sys.exit(1)
     n_render = frame_end - args.frame_start
     if n_render > len(snap_paths) * args.frames_per_snap:
-        print(
+        _log(
             f"warning: {n_render} frames need more snaps than available "
             f"({len(snap_paths)} after filter); last snap will repeat"
         )
 
     if args.path == "cinematic":
         cameras, ups = cinematic_camera_path(args.n_frames)
-        print("camera path: cinematic (keyframed); "
-              "--r-start/--r-end/--n-turns/--tilt-deg ignored")
+        _log("camera path: cinematic (keyframed); "
+             "--r-start/--r-end/--n-turns/--tilt-deg ignored")
     else:
         cameras = camera_path(
             args.n_frames,
@@ -284,12 +322,16 @@ def main():
 
     snap_lo = snap_num_from_name(snap_paths[0], args.snap_prefix)
     snap_hi = snap_num_from_name(snap_paths[-1], args.snap_prefix)
-    print(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
-    print(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
-    print(f"output -> {args.output_dir}")
+    _log("=== render_flythrough_movie ===")
+    _log(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
+    _log(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
+    _log(f"frames_per_snap={args.frames_per_snap}  progress_every={args.progress_every}")
+    _log(f"output -> {args.output_dir.resolve()}")
+    _log("starting render loop...")
 
     cached = None
     x = y = z = masses = None
+    header = None
     vmin = args.vmin
     vmax = args.vmax
     scale_locked = False
@@ -297,11 +339,16 @@ def main():
 
     for i in range(args.frame_start, frame_end):
         sidx = min(i // args.frames_per_snap, len(snap_paths) - 1)
+        snap_n = snap_num_from_name(snap_paths[sidx], args.snap_prefix)
         if sidx != cached:
             snap_path = snap_paths[sidx]
-            print(f"\nloading snap {snap_num_from_name(snap_path, args.snap_prefix)}: {snap_path.name}")
+            _log(f"\nloading snap {snap_n}: {snap_path.name}")
+            t_load = time.time()
             x, y, z, masses, header = load_gas_bar(snap_path)
-            print(f"  N_gas = {x.size:,}  Time = {header['Time']:.6g}")
+            _log(
+                f"  loaded in {time.time() - t_load:.1f}s  "
+                f"N_gas = {x.size:,}  Time = {header['Time']:.6g}"
+            )
             cached = sidx
 
         cam = cameras[i]
@@ -310,17 +357,26 @@ def main():
         if args.lock_color_scale and not scale_locked:
             vmin, vmax = color_limits(sigma)
             scale_locked = True
-            print(f"locked color scale from frame {i}: vmin={vmin:.4g}  vmax={vmax:.4g}")
+            _log(f"locked color scale from frame {i}: vmin={vmin:.4g}  vmax={vmax:.4g}")
 
         out_path = args.output_dir / f"frame_{i:04d}.png"
-        title = f"frame {i:04d}  snap {snap_num_from_name(snap_paths[sidx], args.snap_prefix)}"
+        title = f"frame {i:04d}  snap {snap_n}"
         write_png(sigma, out_path, vmin, vmax, title=title,
                   time_myr=float(header["Time"]) * CODE_TIME_TO_MYR)
 
-        if (i - args.frame_start) % 10 == 0:
-            print(f"  wrote {out_path.name}")
+        done = i - args.frame_start + 1
+        is_last = i == frame_end - 1
+        if done % args.progress_every == 0 or is_last:
+            elapsed = time.time() - t0
+            _log(format_progress_line(
+                done=done,
+                total=n_render,
+                frame_index=i,
+                snap_number=snap_n,
+                elapsed_s=elapsed,
+            ))
 
-    print(f"\ndone in {time.time() - t0:.1f} s")
+    _log(f"\ndone: {n_render} frames in {time.time() - t0:.1f} s")
 
 
 if __name__ == "__main__":

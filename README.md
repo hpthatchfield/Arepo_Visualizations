@@ -24,6 +24,48 @@ Notebooks in `examples/` are meant to run top to bottom after you give paths for
 | `lbv_demo.ipynb` | CO-weighted `l–b` and `l–v` maps |
 | `surface_density_flythrough_demo.ipynb` | Camera path + PNG frames |
 
+## Scripts
+
+Long-running jobs live in `scripts/`. Run from the repo root with the package installed (`pip install -e .`).
+
+### Fly-through movie (`render_flythrough_movie.py`)
+
+Renders a PNG sequence from gas snapshots using a perspective surface-density projection. Camera paths:
+
+| `--path` | Description |
+|----------|-------------|
+| `orbit` (default) | Tilted circular orbit with radial drift |
+| `cinematic` | Keyframed zoom-in, orbit from above, dip to edge-on, exit below disk |
+
+Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). On a cluster, use `tmux` and `python -u` so SSH drops do not lose output:
+
+```bash
+tmux new -s flythrough
+python -u scripts/render_flythrough_movie.py \
+  --snap-dir /path/to/snapshots/ \
+  --snap-prefix phoenix_stinks_1Msun \
+  --first-snap-number 500 \
+  --last-snap-number 1000 \
+  --path cinematic \
+  --n-frames 900 \
+  --frames-per-snap 20 \
+  --progress-every 5 \
+  -o flythrough_frames \
+  2>&1 | tee flythrough_render.log
+```
+
+Encode frames with ffmpeg:
+
+```bash
+ffmpeg -y -framerate 24 -i flythrough_frames/frame_%04d.png \
+  -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+  -c:v libx264 -pix_fmt yuv420p flythrough.mp4
+```
+
+### Single-frame preview (`preview_flythrough_frame.py`)
+
+Renders one frame with the same parameters as the movie script — useful for checking camera position or color scale before a long run.
+
 ## Demo output preview
 
 Save rendered demo figures/GIFs to `example_output/` and they will render directly here.

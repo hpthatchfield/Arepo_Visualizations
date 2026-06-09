@@ -11,6 +11,7 @@ from scripts.render_flythrough_movie import (
     build_parser,
     cinematic_camera_path,
     color_limits,
+    format_progress_line,
     list_snaps,
 )
 
@@ -59,6 +60,22 @@ def test_movie_defaults_to_autoscale_lock():
     assert args.lock_color_scale is True
     assert args.vmin == movie.VMIN
     assert args.vmax == movie.VMAX
+    assert args.progress_every == 1
+
+
+def test_format_progress_line():
+    line = format_progress_line(
+        done=10,
+        total=100,
+        frame_index=9,
+        snap_number=500,
+        elapsed_s=600.0,
+    )
+    assert "[10/100" in line
+    assert "frame 0009" in line
+    assert "snap 500" in line
+    assert "elapsed=10.0m" in line
+    assert "eta=90.0m" in line
 
 
 def test_movie_no_lock_uses_fixed_limits():
