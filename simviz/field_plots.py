@@ -262,7 +262,7 @@ def project_surface_density_camera(
     x,
     y,
     z,
-    masses,
+    weights,
     camera_position,
     target=(0.0, 0.0, 0.0),
     up_hint=(0.0, 0.0, 1.0),
@@ -280,18 +280,25 @@ def project_surface_density_camera(
     masked_fill_weight_sigma_px=0.5,
     masked_fill_percentiles=(20.0, 85.0),
     masked_fill_mask_power=1.0,
+    *,
+    masses=None,
 ):
-    """Perspective mass map (2d histogram in camera plane).
+    """Perspective surface-density map (2d histogram in the camera plane).
 
-    Optional smoothing: smooth_sigma_px, adaptive_smooth_sigmas, or masked_fill_sigmas
-    (only one of the latter two).
+    ``weights`` are summed into image pixels — typically gas **Density** in code
+    units (same weighting as ``project_column_density_xy``), or cell **Masses**
+    for a mass-surface map. Optional smoothing: ``smooth_sigma_px``,
+    ``adaptive_smooth_sigmas``, or ``masked_fill_sigmas`` (only one of the
+    latter two).
     """
     from .projections import world_to_camera
 
+    if masses is not None:
+        weights = masses
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     z = np.asarray(z, dtype=np.float64)
-    masses = np.asarray(masses, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64)
 
     x_cam, y_cam, z_cam = world_to_camera(
         x, y, z, camera_position=camera_position, target=target, up_hint=up_hint
@@ -310,7 +317,7 @@ def project_surface_density_camera(
 
     x_img = x_cam[depth_ok] / (z_cam[depth_ok] * tx)
     y_img = y_cam[depth_ok] / (z_cam[depth_ok] * ty)
-    m_img = masses[depth_ok]
+    w_img = weights[depth_ok]
 
     in_view = (np.abs(x_img) <= 1.0) & (np.abs(y_img) <= 1.0)
     sigma = histogram2d(
@@ -318,7 +325,7 @@ def project_surface_density_camera(
         y_img[in_view],
         range=[[-1.0, 1.0], [-1.0, 1.0]],
         bins=(nx, ny),
-        weights=m_img[in_view],
+        weights=w_img[in_view],
     ).T
 
     if masked_fill_sigmas is not None and adaptive_smooth_sigmas is not None:

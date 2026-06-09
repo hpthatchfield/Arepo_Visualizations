@@ -115,3 +115,25 @@ def test_project_surface_density_camera_adaptive_sigmas():
     )
     assert s_adapt.shape == (48, 48)
     assert np.all(np.isfinite(s_adapt))
+
+
+def test_project_surface_density_camera_density_vs_mass_weights():
+    rng = np.random.default_rng(5)
+    n = 500
+    x = rng.uniform(-4.0, 4.0, n)
+    y = rng.uniform(-4.0, 4.0, n)
+    z = rng.uniform(2.0, 18.0, n)
+    rho = rng.uniform(1e-4, 1.0, n)
+    mass = rho * rng.uniform(0.5, 2.0, n)
+    cam = np.array([7.0, 3.0, -12.0])
+
+    s_rho, _ = project_surface_density_camera(
+        x, y, z, rho, camera_position=cam, nx=48, ny=48, z_far=100.0,
+        smooth_sigma_px=None,
+    )
+    s_mass, _ = project_surface_density_camera(
+        x, y, z, mass, camera_position=cam, nx=48, ny=48, z_far=100.0,
+        smooth_sigma_px=None,
+    )
+    assert s_rho.shape == s_mass.shape == (48, 48)
+    assert not np.allclose(s_rho, s_mass)

@@ -6,8 +6,10 @@ import pytest
 import scripts.preview_flythrough_frame as preview
 import scripts.render_flythrough_movie as movie
 from scripts.preview_flythrough_frame import build_parser as build_preview_parser
-from scripts.preview_flythrough_frame import camera_path, snap_num_from_name
+from scripts.preview_flythrough_frame import snap_num_from_name
+from scripts.render_flythrough_movie import camera_path
 from scripts.render_flythrough_movie import (
+    build_camera_path,
     build_parser,
     cinematic_camera_path,
     color_limits,
@@ -87,9 +89,14 @@ def test_preview_reuses_movie_definitions():
     """Preview must use the movie's shared params/helpers, not its own copies."""
     assert preview.VMIN is movie.VMIN
     assert preview.VMAX is movie.VMAX
-    assert preview.project_mass_map is movie.project_mass_map
-    assert preview.camera_path is movie.camera_path
+    assert preview.project_surface_map is movie.project_surface_map
+    assert preview.build_camera_path is movie.build_camera_path
     assert preview.color_limits is movie.color_limits
+
+
+def test_movie_defaults_to_density_projection_weight():
+    args = build_parser().parse_args(["--snap-dir", "/tmp"])
+    assert args.projection_weight == "density"
 
 
 def test_preview_defaults_to_autoscale():
@@ -126,3 +133,30 @@ def test_cinematic_camera_path_endpoints():
     assert np.isclose(r_end, 18.0, atol=0.2)
     assert pts[0][2] > 0          # starts above the disk plane
     assert pts[-1][2] < 0         # ends below the disk plane
+
+
+def test_edge_orbit_path_endpoints():
+    pts, ups = build_camera_path("edge-orbit", 240)
+    assert pts.shape == (240, 3)
+    assert ups.shape == (240, 3)
+    assert np.isclose(pts[0][2], 0.0, atol=0.05)   # starts in-plane (edge-on)
+    assert np.isclose(pts[-1][2], 0.0, atol=0.05)   # ends in-plane
+    assert np.allclose(pts[0], pts[-1], atol=0.15)  # smooth loop closure
+    mid = int(0.5 * 240)
+    assert pts[mid][2] > 3.0                      # ~30 deg orbit mid-point
+
+
+def test_zoom_observe_path_endpoints():
+    pts, _ = build_camera_path("zoom-observe", 240)
+    r0 = np.linalg.norm(pts[0])
+    r_end = np.linalg.norm(pts[-1])
+    assert r0 > r_end + 5.0                         # starts far out, ends closer
+    assert pts[0][2] > 5.0                          # starts well above the plane
+    assert np.isclose(pts[-1][2], 0.0, atol=0.05)   # ends edge-on
+    assert not np.allclose(pts[0], pts[-1], atol=1.0)  # does not loop back
+
+
+def test_build_camera_path_orbit_has_no_ups():
+    pts, ups = build_camera_path("orbit", 12)
+    assert pts.shape == (12, 3)
+    assert ups is None

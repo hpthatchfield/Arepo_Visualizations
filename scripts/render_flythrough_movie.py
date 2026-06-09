@@ -83,18 +83,31 @@ def list_snaps(snap_dir, prefix=SNAP_PREFIX, first_snap_number=None, last_snap_n
     return paths
 
 
-def load_gas_bar(snap_path):
-    data, header = read_snapshot_hdf5(snap_path, fields=("Coordinates", "Masses"))
+PROJECTION_WEIGHT_FIELDS = {
+    "density": "Density",
+    "mass": "Masses",
+}
+
+
+def load_gas_bar(snap_path, projection_weight="density"):
+    """Load gas coordinates in the bar frame and per-cell histogram weights."""
+    if projection_weight not in PROJECTION_WEIGHT_FIELDS:
+        raise ValueError(
+            f"projection_weight must be one of {sorted(PROJECTION_WEIGHT_FIELDS)}; "
+            f"got {projection_weight!r}"
+        )
+    weight_key = PROJECTION_WEIGHT_FIELDS[projection_weight]
+    data, header = read_snapshot_hdf5(snap_path, fields=("Coordinates", weight_key))
     t = float(header["Time"])
     box = float(header["BoxSize"])
     x, y, z = np.asarray(data["Coordinates"], dtype=np.float64).T
-    masses = np.asarray(data["Masses"], dtype=np.float64)
+    weights = np.asarray(data[weight_key], dtype=np.float64)
     x -= box / 2.0
     y -= box / 2.0
     z -= box / 2.0
     z0 = np.zeros_like(x)
     x, y, _, _ = rotate_to_bar_frame(x, y, z0, z0, t)
-    return x, y, z, masses, header
+    return x, y, z, weights, header
 
 
 def camera_path(n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
@@ -114,6 +127,29 @@ DEFAULT_CINEMATIC_KEYFRAMES = (
     (0.80, 10.0, 360.0, 0.0),    # dip down to edge-on (l-b view)
     (1.00, 18.0, 360.0, -30.0),  # continue below while zooming back out
 )
+
+# Shorter loop: edge-on (mock from-the-sun view) -> tilt to 30 deg -> one orbit -> back.
+DEFAULT_EDGE_ORBIT_KEYFRAMES = (
+    (0.00, 12.0, 0.0, 0.0),      # start edge-on, in the disk plane
+    (0.12, 10.0, 0.0, 30.0),     # tilt up to 30 deg above the plane
+    (0.88, 10.0, 360.0, 30.0),   # one full orbit at 30 deg
+    (1.00, 12.0, 360.0, 0.0),    # dip back to edge-on (closes the loop)
+)
+
+# Far-out galaxy view -> zoom to CMZ -> partial orbit -> dip to edge-on and hold.
+DEFAULT_ZOOM_OBSERVE_KEYFRAMES = (
+    (0.00, 22.0, 0.0, 50.0),     # far out, whole-disk context
+    (0.40, 9.0, 0.0, 35.0),      # zoom toward the center
+    (0.60, 8.0, 55.0, 35.0),     # partial rotation (~55 deg)
+    (0.85, 9.0, 70.0, 8.0),      # dip toward the midplane
+    (1.00, 9.0, 70.0, 0.0),      # end edge-on (mock observational view)
+)
+
+PATH_KEYFRAMES = {
+    "cinematic": DEFAULT_CINEMATIC_KEYFRAMES,
+    "edge-orbit": DEFAULT_EDGE_ORBIT_KEYFRAMES,
+    "zoom-observe": DEFAULT_ZOOM_OBSERVE_KEYFRAMES,
+}
 
 
 def _smooth_interp(t, fracs, values):
@@ -171,12 +207,25 @@ def cinematic_camera_path(n_frames, keyframes=DEFAULT_CINEMATIC_KEYFRAMES):
     return pts, ups
 
 
-def project_mass_map(x, y, z, masses, cam, smooth=True, up=(0.0, 0.0, 1.0)):
+def build_camera_path(path, n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
+    """Return ``(positions, ups)`` for a named camera path. ``ups`` is None for orbit."""
+    if path in PATH_KEYFRAMES:
+        return cinematic_camera_path(n_frames, keyframes=PATH_KEYFRAMES[path])
+    return camera_path(
+        n_frames,
+        r_start=r_start,
+        r_end=r_end,
+        n_turns=n_turns,
+        tilt_deg=tilt_deg,
+    ), None
+
+
+def project_surface_map(x, y, z, weights, cam, smooth=True, up=(0.0, 0.0, 1.0)):
     sigma, _ = project_surface_density_camera(
         x,
         y,
         z,
-        masses,
+        weights,
         camera_position=cam,
         target=(0.0, 0.0, 0.0),
         up_hint=up,
@@ -191,6 +240,9 @@ def project_mass_map(x, y, z, masses, cam, smooth=True, up=(0.0, 0.0, 1.0)):
         masked_fill_mask_power=MASKED_FILL_MASK_POWER,
     )
     return sigma
+
+
+project_mass_map = project_surface_map
 
 
 def color_limits(sigma, vmin_floor=1e-6):
@@ -249,11 +301,14 @@ def build_parser():
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("flythrough_frames"))
     parser.add_argument(
         "--path",
-        choices=("orbit", "cinematic"),
+        choices=("orbit", "cinematic", "edge-orbit", "zoom-observe"),
         default="orbit",
-        help="camera path: 'orbit' (tilted circle, default) or 'cinematic' "
-        "(keyframed zoom-in / orbit from above / dip to edge-on / exit below); "
-        "cinematic ignores --r-start/--r-end/--n-turns/--tilt-deg",
+        help="camera path: 'orbit' (tilted circle, default), 'cinematic' "
+        "(zoom-in / orbit from above / dip to edge-on / exit below), "
+        "'edge-orbit' (edge-on -> 30 deg -> one orbit -> edge-on loop), or "
+        "'zoom-observe' (far-out galaxy -> zoom to CMZ -> partial orbit -> "
+        "edge-on observational end); keyframed paths ignore "
+        "--r-start/--r-end/--n-turns/--tilt-deg",
     )
     parser.add_argument("--n-frames", type=int, default=300)
     parser.add_argument("--frames-per-snap", type=int, default=5)
@@ -277,6 +332,13 @@ def build_parser():
         type=int,
         default=1,
         help="print a progress line every N rendered frames (default: 1)",
+    )
+    parser.add_argument(
+        "--projection-weight",
+        choices=tuple(PROJECTION_WEIGHT_FIELDS),
+        default="density",
+        help="histogram weight per gas cell: 'density' (default, matches "
+        "project_column_density_xy) or 'mass'",
     )
     return parser
 
@@ -305,19 +367,19 @@ def main():
             f"({len(snap_paths)} after filter); last snap will repeat"
         )
 
-    if args.path == "cinematic":
-        cameras, ups = cinematic_camera_path(args.n_frames)
-        _log("camera path: cinematic (keyframed); "
+    if args.path in PATH_KEYFRAMES:
+        cameras, ups = build_camera_path(args.path, args.n_frames)
+        _log(f"camera path: {args.path} (keyframed); "
              "--r-start/--r-end/--n-turns/--tilt-deg ignored")
     else:
-        cameras = camera_path(
+        cameras, ups = build_camera_path(
+            args.path,
             args.n_frames,
             r_start=args.r_start,
             r_end=args.r_end,
             n_turns=args.n_turns,
             tilt_deg=args.tilt_deg,
         )
-        ups = None
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     snap_lo = snap_num_from_name(snap_paths[0], args.snap_prefix)
@@ -326,11 +388,12 @@ def main():
     _log(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
     _log(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
     _log(f"frames_per_snap={args.frames_per_snap}  progress_every={args.progress_every}")
+    _log(f"projection_weight={args.projection_weight}")
     _log(f"output -> {args.output_dir.resolve()}")
     _log("starting render loop...")
 
     cached = None
-    x = y = z = masses = None
+    x = y = z = weights = None
     header = None
     vmin = args.vmin
     vmax = args.vmax
@@ -344,7 +407,9 @@ def main():
             snap_path = snap_paths[sidx]
             _log(f"\nloading snap {snap_n}: {snap_path.name}")
             t_load = time.time()
-            x, y, z, masses, header = load_gas_bar(snap_path)
+            x, y, z, weights, header = load_gas_bar(
+                snap_path, projection_weight=args.projection_weight
+            )
             _log(
                 f"  loaded in {time.time() - t_load:.1f}s  "
                 f"N_gas = {x.size:,}  Time = {header['Time']:.6g}"
@@ -353,7 +418,7 @@ def main():
 
         cam = cameras[i]
         up = (0.0, 0.0, 1.0) if ups is None else ups[i]
-        sigma = project_mass_map(x, y, z, masses, cam, up=up)
+        sigma = project_surface_map(x, y, z, weights, cam, up=up)
         if args.lock_color_scale and not scale_locked:
             vmin, vmax = color_limits(sigma)
             scale_locked = True

@@ -22,17 +22,20 @@ sys.path.insert(0, str(_PKG_ROOT))
 
 from scripts.render_flythrough_movie import (
     CODE_TIME_TO_MYR,
+    PATH_KEYFRAMES,
+    PROJECTION_WEIGHT_FIELDS,
     SNAP_PREFIX,
     VMAX,
     VMIN,
-    camera_path,
-    cinematic_camera_path,
+    build_camera_path,
     color_limits,
     load_gas_bar,
-    project_mass_map,
+    project_surface_map,
     snap_num_from_name,
     write_png,
 )
+
+project_mass_map = project_surface_map
 
 
 def describe_map(sigma, label):
@@ -88,10 +91,11 @@ def build_parser():
     parser.add_argument("--n-frames", type=int, default=300)
     parser.add_argument(
         "--path",
-        choices=("orbit", "cinematic"),
+        choices=("orbit", "cinematic", "edge-orbit", "zoom-observe"),
         default="orbit",
-        help="camera path: 'orbit' (default) or 'cinematic' (keyframed); "
-        "cinematic ignores --r-start/--r-end/--n-turns/--tilt-deg",
+        help="camera path: 'orbit' (default), 'cinematic', 'edge-orbit', or "
+        "'zoom-observe' (keyframed); keyframed paths ignore "
+        "--r-start/--r-end/--n-turns/--tilt-deg",
     )
     parser.add_argument("-o", "--output", type=Path, default=None)
     parser.add_argument("--r-start", type=float, default=12.0)
@@ -117,6 +121,12 @@ def build_parser():
         action="store_true",
         help="print stage-by-stage map stats and write a raw-vs-smoothed comparison PNG",
     )
+    parser.add_argument(
+        "--projection-weight",
+        choices=tuple(PROJECTION_WEIGHT_FIELDS),
+        default="density",
+        help="histogram weight per gas cell: 'density' (default) or 'mass'",
+    )
     return parser
 
 
@@ -141,29 +151,32 @@ def main():
         out_path = _PKG_ROOT / "example_output" / "flythrough_preview.png"
 
     print(f"loading {snap_path}")
-    x, y, z, masses, header = load_gas_bar(snap_path)
+    x, y, z, weights, header = load_gas_bar(
+        snap_path, projection_weight=args.projection_weight
+    )
     print(f"  N_gas = {x.size:,}  Time = {header['Time']:.6g}")
+    print(f"  projection_weight = {args.projection_weight}")
 
-    if args.path == "cinematic":
-        path, ups = cinematic_camera_path(args.n_frames)
+    if args.path in PATH_KEYFRAMES:
+        path, ups = build_camera_path(args.path, args.n_frames)
     else:
-        path = camera_path(
+        path, ups = build_camera_path(
+            args.path,
             args.n_frames,
             r_start=args.r_start,
             r_end=args.r_end,
             n_turns=args.n_turns,
             tilt_deg=args.tilt_deg,
         )
-        ups = None
     idx = args.frame_index % args.n_frames
     cam = path[idx]
     up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
 
     print("projecting...")
-    sigma = project_mass_map(x, y, z, masses, cam, smooth=not args.no_smooth, up=up)
+    sigma = project_surface_map(x, y, z, weights, cam, smooth=not args.no_smooth, up=up)
 
     if args.debug:
-        sigma_raw = project_mass_map(x, y, z, masses, cam, smooth=False, up=up)
+        sigma_raw = project_surface_map(x, y, z, weights, cam, smooth=False, up=up)
         describe_map(sigma_raw, "raw histogram")
         describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")
 

@@ -36,23 +36,29 @@ Renders a PNG sequence from gas snapshots using a perspective surface-density pr
 |----------|-------------|
 | `orbit` (default) | Tilted circular orbit with radial drift |
 | `cinematic` | Keyframed zoom-in, orbit from above, dip to edge-on, exit below disk |
+| `edge-orbit` | Edge-on (mock from-the-sun view) → 30° above plane → one orbit → back to edge-on |
+| `zoom-observe` | Far-out galaxy view → zoom to CMZ → partial orbit → edge-on observational end |
 
-Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). On a cluster, use `tmux` and `python -u` so SSH drops do not lose output:
+Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). Projections default to **density-weighted** histograms (same weighting idea as ``project_column_density_xy``); pass ``--projection-weight mass`` for the old mass map.
+
+On a cluster, use `tmux` and `python -u` so SSH drops do not lose output:
 
 ```bash
 tmux new -s flythrough
 python -u scripts/render_flythrough_movie.py \
   --snap-dir /path/to/snapshots/ \
   --snap-prefix phoenix_stinks_1Msun \
-  --first-snap-number 500 \
-  --last-snap-number 1000 \
-  --path cinematic \
-  --n-frames 900 \
-  --frames-per-snap 20 \
-  --progress-every 5 \
+  --first-snap-number 820 \
+  --last-snap-number 999 \
+  --path edge-orbit \
+  --n-frames 180 \
+  --frames-per-snap 1 \
+  --progress-every 10 \
   -o flythrough_frames \
   2>&1 | tee flythrough_render.log
 ```
+
+This renders **180 frames** (one snapshot per frame, snaps 820–999), giving a **~7.5 s** movie at 24 fps with a smooth, looping camera path.
 
 Encode frames with ffmpeg:
 
