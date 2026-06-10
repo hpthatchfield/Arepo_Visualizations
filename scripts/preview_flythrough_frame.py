@@ -22,6 +22,7 @@ sys.path.insert(0, str(_PKG_ROOT))
 
 from scripts.render_flythrough_movie import (
     CODE_TIME_TO_MYR,
+    MASKED_FILL_BLEND_MODE,
     PATH_KEYFRAMES,
     PROJECTION_WEIGHT_FIELDS,
     SNAP_PREFIX,
@@ -127,6 +128,12 @@ def build_parser():
         default="density",
         help="histogram weight per gas cell: 'density' (default) or 'mass'",
     )
+    parser.add_argument(
+        "--smooth-blend",
+        choices=("detail", "linear"),
+        default=MASKED_FILL_BLEND_MODE,
+        help="masked_fill blend: 'detail' (default) or 'linear' (legacy)",
+    )
     return parser
 
 
@@ -173,10 +180,15 @@ def main():
     up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
 
     print("projecting...")
-    sigma = project_surface_map(x, y, z, weights, cam, smooth=not args.no_smooth, up=up)
+    sigma = project_surface_map(
+        x, y, z, weights, cam,
+        smooth=not args.no_smooth, up=up, smooth_blend=args.smooth_blend,
+    )
 
     if args.debug:
-        sigma_raw = project_surface_map(x, y, z, weights, cam, smooth=False, up=up)
+        sigma_raw = project_surface_map(
+            x, y, z, weights, cam, smooth=False, up=up,
+        )
         describe_map(sigma_raw, "raw histogram")
         describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")
 

@@ -43,10 +43,11 @@ FOV_X_DEG = 55.0
 NX, NY = 700, 700
 Z_NEAR, Z_FAR = 0.2, 30.0
 VMIN, VMAX = 5e-4, 2e1
-MASKED_FILL_SIGMAS = (0.8, 12.0)
+MASKED_FILL_SIGMAS = (0.0, 12.0)
 MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
-MASKED_FILL_PERCENTILES = (30.0, 88.0)
-MASKED_FILL_MASK_POWER = 2.0
+MASKED_FILL_PERCENTILES = (25.0, 90.0)
+MASKED_FILL_MASK_POWER = 1.0
+MASKED_FILL_BLEND_MODE = "detail"
 CODE_TIME_TO_MYR = 98.7
 
 
@@ -220,7 +221,10 @@ def build_camera_path(path, n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt
     ), None
 
 
-def project_surface_map(x, y, z, weights, cam, smooth=True, up=(0.0, 0.0, 1.0)):
+def project_surface_map(
+    x, y, z, weights, cam, smooth=True, up=(0.0, 0.0, 1.0),
+    smooth_blend=MASKED_FILL_BLEND_MODE,
+):
     sigma, _ = project_surface_density_camera(
         x,
         y,
@@ -238,6 +242,7 @@ def project_surface_map(x, y, z, weights, cam, smooth=True, up=(0.0, 0.0, 1.0)):
         masked_fill_weight_sigma_px=MASKED_FILL_WEIGHT_SIGMA_PX,
         masked_fill_percentiles=MASKED_FILL_PERCENTILES,
         masked_fill_mask_power=MASKED_FILL_MASK_POWER,
+        masked_fill_blend_mode=smooth_blend,
     )
     return sigma
 
@@ -340,6 +345,13 @@ def build_parser():
         help="histogram weight per gas cell: 'density' (default, matches "
         "project_column_density_xy) or 'mass'",
     )
+    parser.add_argument(
+        "--smooth-blend",
+        choices=("detail", "linear"),
+        default=MASKED_FILL_BLEND_MODE,
+        help="masked_fill blend: 'detail' (default, no dark halos at density "
+        "edges) or 'linear' (legacy w*sharp + (1-w)*fill)",
+    )
     return parser
 
 
@@ -388,7 +400,7 @@ def main():
     _log(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
     _log(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
     _log(f"frames_per_snap={args.frames_per_snap}  progress_every={args.progress_every}")
-    _log(f"projection_weight={args.projection_weight}")
+    _log(f"projection_weight={args.projection_weight}  smooth_blend={args.smooth_blend}")
     _log(f"output -> {args.output_dir.resolve()}")
     _log("starting render loop...")
 
@@ -418,7 +430,9 @@ def main():
 
         cam = cameras[i]
         up = (0.0, 0.0, 1.0) if ups is None else ups[i]
-        sigma = project_surface_map(x, y, z, weights, cam, up=up)
+        sigma = project_surface_map(
+            x, y, z, weights, cam, up=up, smooth_blend=args.smooth_blend,
+        )
         if args.lock_color_scale and not scale_locked:
             vmin, vmax = color_limits(sigma)
             scale_locked = True

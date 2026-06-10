@@ -97,6 +97,7 @@ def test_preview_reuses_movie_definitions():
 def test_movie_defaults_to_density_projection_weight():
     args = build_parser().parse_args(["--snap-dir", "/tmp"])
     assert args.projection_weight == "density"
+    assert args.smooth_blend == "detail"
 
 
 def test_preview_defaults_to_autoscale():

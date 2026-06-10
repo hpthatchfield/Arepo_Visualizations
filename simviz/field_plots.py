@@ -213,9 +213,23 @@ def masked_fill_mass_map(
     weight_sigma_px=0.5,
     percentiles=(20.0, 85.0),
     mask_power=1.0,
+    blend_mode="linear",
 ):
-    """Wide blur fill in low density; sharp (or raw) map in high density."""
+    """Wide blur fill in low density; sharp (or raw) map in high density.
+
+    blend_mode
+    ----------
+    ``"linear"`` :
+        ``w * base + (1 - w) * fill`` (legacy).
+    ``"detail"`` :
+        ``fill + w * max(0, base - fill)`` — only adds structure above the
+        wide-blur envelope, avoiding dark halos where ``base < fill`` at
+        density boundaries.
+    """
     from scipy.ndimage import gaussian_filter
+
+    if blend_mode not in ("linear", "detail"):
+        raise ValueError("blend_mode must be 'linear' or 'detail'.")
 
     sigma = np.asarray(sigma, dtype=np.float64)
     if float(sigma_fill_px) <= 0.0:
@@ -255,6 +269,8 @@ def masked_fill_mass_map(
             raise ValueError("mask_power must be positive.")
         w = w**mp
 
+    if blend_mode == "detail":
+        return fill + w * np.maximum(0.0, base - fill)
     return w * base + (1.0 - w) * fill
 
 
@@ -280,6 +296,7 @@ def project_surface_density_camera(
     masked_fill_weight_sigma_px=0.5,
     masked_fill_percentiles=(20.0, 85.0),
     masked_fill_mask_power=1.0,
+    masked_fill_blend_mode="linear",
     *,
     masses=None,
 ):
@@ -346,6 +363,7 @@ def project_surface_density_camera(
             weight_sigma_px=masked_fill_weight_sigma_px,
             percentiles=masked_fill_percentiles,
             mask_power=masked_fill_mask_power,
+            blend_mode=masked_fill_blend_mode,
         )
     elif adaptive_smooth_sigmas is not None:
         if len(adaptive_smooth_sigmas) != 2:

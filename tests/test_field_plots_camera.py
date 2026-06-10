@@ -67,6 +67,40 @@ def test_masked_fill_mass_map_mask_power_runs():
     assert np.all(np.isfinite(out))
 
 
+def test_masked_fill_detail_blend_avoids_shadow_trough():
+    """Detail blend must not fall below the wide-blur fill at boundaries."""
+    sigma = np.zeros((64, 64), dtype=np.float64)
+    sigma[32, 32] = 100.0
+    linear = masked_fill_mass_map(
+        sigma,
+        sigma_fill_px=8.0,
+        sigma_sharp_px=0.0,
+        weight_sigma_px=1.0,
+        percentiles=(20.0, 85.0),
+        blend_mode="linear",
+    )
+    detail = masked_fill_mass_map(
+        sigma,
+        sigma_fill_px=8.0,
+        sigma_sharp_px=0.0,
+        weight_sigma_px=1.0,
+        percentiles=(20.0, 85.0),
+        blend_mode="detail",
+    )
+    fill = masked_fill_mass_map(
+        sigma,
+        sigma_fill_px=8.0,
+        sigma_sharp_px=0.0,
+        weight_sigma_px=0.0,
+        percentiles=(0.0, 100.0),
+        blend_mode="linear",
+    )
+    # detail should never be below fill envelope (within float tolerance)
+    assert np.all(detail + 1e-12 >= fill)
+    # linear blend often dips below fill near bright peaks
+    assert np.any(linear < fill - 1e-6)
+
+
 def test_project_surface_density_camera_masked_fill():
     rng = np.random.default_rng(4)
     n = 400
