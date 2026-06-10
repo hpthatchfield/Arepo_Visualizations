@@ -12,8 +12,8 @@ looks buffered. Typical phases:
 
 Encode frames with ffmpeg, e.g.::
 
-    ffmpeg -y -framerate 24 -i flythrough_frames/frame_%04d.png \\
-        -c:v libx264 -pix_fmt yuv420p flythrough.mp4
+    ffmpeg -y -framerate 24 -i example_output/flythrough_frames/frame_%04d.png \\
+        -c:v libx264 -pix_fmt yuv420p example_output/flythrough.mp4
 """
 
 import argparse
@@ -51,7 +51,7 @@ MASKED_FILL_BLEND_MODE = "detail"
 MASKED_FILL_DENSE_THRESHOLD = 0.35
 PROJECTION_METHOD = "column"
 COLUMN_DEPTH_BINS = 48
-COLUMN_SMOOTH_SIGMA_PX = 1.0
+COLUMN_SMOOTH_SIGMA_PX = 0.5
 CODE_TIME_TO_MYR = 98.7
 
 PROJECTION_METHODS = ("surface", "column")
@@ -347,7 +347,12 @@ def build_parser():
         default=None,
         help="only use snaps with this number or lower in the filename",
     )
-    parser.add_argument("-o", "--output-dir", type=Path, default=Path("flythrough_frames"))
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=_PKG_ROOT / "example_output" / "flythrough_frames",
+    )
     parser.add_argument(
         "--path",
         choices=("orbit", "cinematic", "edge-orbit", "zoom-observe"),
