@@ -17,6 +17,7 @@ from .field_plots import (
     project_bfield_plane,
     project_bfield_xy,
     project_surface_density_camera,
+    project_column_density_camera,
     project_column_density_xy,
     rgba_intensity_with_lic_striations,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "project_bfield_plane",
     "project_bfield_xy",
     "project_surface_density_camera",
+    "project_column_density_camera",
     "project_column_density_xy",
     "rgba_intensity_with_lic_striations",
     "camera_frame",

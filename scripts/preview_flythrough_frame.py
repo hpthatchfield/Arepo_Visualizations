@@ -24,6 +24,8 @@ from scripts.render_flythrough_movie import (
     CODE_TIME_TO_MYR,
     MASKED_FILL_BLEND_MODE,
     PATH_KEYFRAMES,
+    PROJECTION_METHOD,
+    PROJECTION_METHODS,
     PROJECTION_WEIGHT_FIELDS,
     SNAP_PREFIX,
     VMAX,
@@ -31,12 +33,12 @@ from scripts.render_flythrough_movie import (
     build_camera_path,
     color_limits,
     load_gas_bar,
-    project_surface_map,
+    project_flythrough_map,
     snap_num_from_name,
     write_png,
 )
 
-project_mass_map = project_surface_map
+project_mass_map = project_flythrough_map
 
 
 def describe_map(sigma, label):
@@ -132,7 +134,13 @@ def build_parser():
         "--smooth-blend",
         choices=("detail", "linear"),
         default=MASKED_FILL_BLEND_MODE,
-        help="masked_fill blend: 'detail' (default) or 'linear' (legacy)",
+        help="masked_fill blend for --projection-method surface only",
+    )
+    parser.add_argument(
+        "--projection-method",
+        choices=PROJECTION_METHODS,
+        default=PROJECTION_METHOD,
+        help="surface or column (default: depth-integrated histogram)",
     )
     return parser
 
@@ -163,6 +171,7 @@ def main():
     )
     print(f"  N_gas = {x.size:,}  Time = {header['Time']:.6g}")
     print(f"  projection_weight = {args.projection_weight}")
+    print(f"  projection_method = {args.projection_method}")
 
     if args.path in PATH_KEYFRAMES:
         path, ups = build_camera_path(args.path, args.n_frames)
@@ -180,14 +189,17 @@ def main():
     up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
 
     print("projecting...")
-    sigma = project_surface_map(
+    sigma = project_flythrough_map(
         x, y, z, weights, cam,
-        smooth=not args.no_smooth, up=up, smooth_blend=args.smooth_blend,
+        smooth=not args.no_smooth, up=up,
+        projection_method=args.projection_method,
+        smooth_blend=args.smooth_blend,
     )
 
     if args.debug:
-        sigma_raw = project_surface_map(
+        sigma_raw = project_flythrough_map(
             x, y, z, weights, cam, smooth=False, up=up,
+            projection_method=args.projection_method,
         )
         describe_map(sigma_raw, "raw histogram")
         describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")

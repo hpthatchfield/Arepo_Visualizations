@@ -39,7 +39,7 @@ Renders a PNG sequence from gas snapshots using a perspective surface-density pr
 | `edge-orbit` | Edge-on (mock from-the-sun view) → 30° above plane → one orbit → back to edge-on |
 | `zoom-observe` | Far-out galaxy view → zoom to CMZ → partial orbit → edge-on observational end |
 
-Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). Projections default to **density-weighted** histograms (same weighting idea as ``project_column_density_xy``); pass ``--projection-weight mass`` for the old mass map.
+Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). Projections default to **density-weighted column integration** (`--projection-method column`, same weighting idea as ``project_column_density_xy``); use `--projection-method surface` for the legacy 2D splat + masked_fill path.
 
 On a cluster, use `tmux` and `python -u` so SSH drops do not lose output:
 

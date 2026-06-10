@@ -89,7 +89,7 @@ def test_preview_reuses_movie_definitions():
     """Preview must use the movie's shared params/helpers, not its own copies."""
     assert preview.VMIN is movie.VMIN
     assert preview.VMAX is movie.VMAX
-    assert preview.project_surface_map is movie.project_surface_map
+    assert preview.project_flythrough_map is movie.project_flythrough_map
     assert preview.build_camera_path is movie.build_camera_path
     assert preview.color_limits is movie.color_limits
 
@@ -98,6 +98,7 @@ def test_movie_defaults_to_density_projection_weight():
     args = build_parser().parse_args(["--snap-dir", "/tmp"])
     assert args.projection_weight == "density"
     assert args.smooth_blend == "detail"
+    assert args.projection_method == "column"
 
 
 def test_preview_defaults_to_autoscale():

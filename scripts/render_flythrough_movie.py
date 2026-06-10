@@ -33,7 +33,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _PKG_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PKG_ROOT))
 
-from simviz.field_plots import project_surface_density_camera
+from simviz.field_plots import project_column_density_camera, project_surface_density_camera
 from simviz.projections import rotate_about_axis, rotate_to_bar_frame
 from simviz.utils import read_snapshot_hdf5
 
@@ -49,7 +49,12 @@ MASKED_FILL_PERCENTILES = (25.0, 90.0)
 MASKED_FILL_MASK_POWER = 1.0
 MASKED_FILL_BLEND_MODE = "detail"
 MASKED_FILL_DENSE_THRESHOLD = 0.35
+PROJECTION_METHOD = "column"
+COLUMN_DEPTH_BINS = 48
+COLUMN_SMOOTH_SIGMA_PX = 1.0
 CODE_TIME_TO_MYR = 98.7
+
+PROJECTION_METHODS = ("surface", "column")
 
 
 def _log(msg=""):
@@ -249,7 +254,44 @@ def project_surface_map(
     return sigma
 
 
-project_mass_map = project_surface_map
+def project_flythrough_map(
+    x,
+    y,
+    z,
+    weights,
+    cam,
+    smooth=True,
+    up=(0.0, 0.0, 1.0),
+    projection_method=PROJECTION_METHOD,
+    smooth_blend=MASKED_FILL_BLEND_MODE,
+):
+    """Dispatch to surface splat (legacy) or column histogram integration."""
+    if projection_method == "column":
+        sigma, _ = project_column_density_camera(
+            x,
+            y,
+            z,
+            weights,
+            camera_position=cam,
+            target=(0.0, 0.0, 0.0),
+            up_hint=up,
+            fov_x_deg=FOV_X_DEG,
+            nx=NX,
+            ny=NY,
+            nz=COLUMN_DEPTH_BINS,
+            z_near=Z_NEAR,
+            z_far=Z_FAR,
+            smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
+        )
+        return sigma
+    if projection_method == "surface":
+        return project_surface_map(
+            x, y, z, weights, cam, smooth=smooth, up=up, smooth_blend=smooth_blend,
+        )
+    raise ValueError(f"projection_method must be one of {PROJECTION_METHODS}")
+
+
+project_mass_map = project_flythrough_map
 
 
 def color_limits(sigma, vmin_floor=1e-6):
@@ -351,8 +393,14 @@ def build_parser():
         "--smooth-blend",
         choices=("detail", "linear"),
         default=MASKED_FILL_BLEND_MODE,
-        help="masked_fill blend: 'detail' (default, no dark halos at density "
-        "edges) or 'linear' (legacy w*sharp + (1-w)*fill)",
+        help="masked_fill blend for --projection-method surface only",
+    )
+    parser.add_argument(
+        "--projection-method",
+        choices=PROJECTION_METHODS,
+        default=PROJECTION_METHOD,
+        help="surface: 2D image histogram + masked_fill; column (default): sum "
+        "density along depth per pixel (like project_column_density_xy)",
     )
     return parser
 
@@ -402,7 +450,9 @@ def main():
     _log(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
     _log(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
     _log(f"frames_per_snap={args.frames_per_snap}  progress_every={args.progress_every}")
-    _log(f"projection_weight={args.projection_weight}  smooth_blend={args.smooth_blend}")
+    _log(f"projection_weight={args.projection_weight}  projection_method={args.projection_method}")
+    if args.projection_method == "surface":
+        _log(f"smooth_blend={args.smooth_blend}")
     _log(f"output -> {args.output_dir.resolve()}")
     _log("starting render loop...")
 
@@ -432,8 +482,10 @@ def main():
 
         cam = cameras[i]
         up = (0.0, 0.0, 1.0) if ups is None else ups[i]
-        sigma = project_surface_map(
-            x, y, z, weights, cam, up=up, smooth_blend=args.smooth_blend,
+        sigma = project_flythrough_map(
+            x, y, z, weights, cam, up=up,
+            projection_method=args.projection_method,
+            smooth_blend=args.smooth_blend,
         )
         if args.lock_color_scale and not scale_locked:
             vmin, vmax = color_limits(sigma)

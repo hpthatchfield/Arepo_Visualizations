@@ -395,6 +395,90 @@ def project_surface_density_camera(
     return sigma, (-1.0, 1.0, -1.0, 1.0)
 
 
+def project_column_density_camera(
+    x,
+    y,
+    z,
+    weights,
+    camera_position,
+    target=(0.0, 0.0, 0.0),
+    up_hint=(0.0, 0.0, 1.0),
+    fov_x_deg=60.0,
+    fov_y_deg=None,
+    nx=600,
+    ny=600,
+    nz=48,
+    z_near=1e-3,
+    z_far=None,
+    smooth_sigma_px=None,
+    *,
+    masses=None,
+):
+    """Perspective column-density map: histogram in image (u, v) and depth, then sum.
+
+    Like ``project_column_density_xy``, each sightline accumulates the sum of
+    ``weights`` (typically density in code units) along the camera forward axis.
+    Particles that project to the same pixel but sit at different depths are
+    summed rather than splatted as a single surface layer.
+    """
+    from .projections import world_to_camera
+
+    if masses is not None:
+        weights = masses
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64)
+    nz = int(nz)
+    if nz < 1:
+        raise ValueError("nz must be >= 1.")
+
+    x_cam, y_cam, z_cam = world_to_camera(
+        x, y, z, camera_position=camera_position, target=target, up_hint=up_hint
+    )
+
+    fov_y = fov_y_deg
+    if fov_y is None:
+        fov_y = fov_x_deg * (ny / float(nx))
+
+    tx = np.tan(np.radians(fov_x_deg) / 2.0)
+    ty = np.tan(np.radians(fov_y) / 2.0)
+
+    depth_ok = z_cam > z_near
+    if z_far is not None:
+        depth_ok &= z_cam < z_far
+
+    x_img = x_cam[depth_ok] / (z_cam[depth_ok] * tx)
+    y_img = y_cam[depth_ok] / (z_cam[depth_ok] * ty)
+    z_vals = z_cam[depth_ok]
+    w_vals = weights[depth_ok]
+
+    in_view = (np.abs(x_img) <= 1.0) & (np.abs(y_img) <= 1.0)
+    if not np.any(in_view):
+        return np.zeros((ny, nx), dtype=np.float64), (-1.0, 1.0, -1.0, 1.0)
+
+    z_hi = float(z_far) if z_far is not None else float(np.max(z_vals[in_view]))
+    z_lo = float(z_near)
+    if z_hi <= z_lo:
+        z_hi = z_lo + 1.0
+
+    samples = np.column_stack([x_img[in_view], y_img[in_view], z_vals[in_view]])
+    sigma_3d, _ = np.histogramdd(
+        samples,
+        bins=(nx, ny, nz),
+        range=((-1.0, 1.0), (-1.0, 1.0), (z_lo, z_hi)),
+        weights=w_vals[in_view],
+    )
+    sigma = np.asarray(sigma_3d, dtype=np.float64).sum(axis=2).T
+
+    if smooth_sigma_px is not None and float(smooth_sigma_px) > 0.0:
+        from scipy.ndimage import gaussian_filter
+
+        sigma = gaussian_filter(sigma, sigma=float(smooth_sigma_px), mode="nearest")
+
+    return sigma, (-1.0, 1.0, -1.0, 1.0)
+
+
 def project_bfield_xy(coords_xyz, bfield_xyz, density_code, grid=None):
     """Density-weighted projection of magnetic field components onto the XY plane.
 

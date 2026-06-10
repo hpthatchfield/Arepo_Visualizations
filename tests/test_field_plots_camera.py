@@ -1,10 +1,12 @@
 """tests for annoying functions that aren't really working how I want them to."""
 
 import numpy as np
+import pytest
 
 from simviz.field_plots import (
     adaptive_gaussian_blend_mass_map,
     masked_fill_mass_map,
+    project_column_density_camera,
     project_surface_density_camera,
 )
 
@@ -151,6 +153,24 @@ def test_project_surface_density_camera_adaptive_sigmas():
     )
     assert s_adapt.shape == (48, 48)
     assert np.all(np.isfinite(s_adapt))
+
+
+def test_project_column_density_camera_sums_along_depth():
+    """Two cells on the same sightline should add, not compete as surface splats."""
+    cam = np.array([0.0, 0.0, -10.0])
+    up = (0.0, 1.0, 0.0)
+    x = np.array([0.0, 0.0])
+    y = np.array([0.0, 0.0])
+    z = np.array([4.0, 8.0])
+    weights = np.array([1.0, 2.0])
+
+    col, _ = project_column_density_camera(
+        x, y, z, weights, camera_position=cam, up_hint=up, nx=32, ny=32, nz=8,
+        z_near=0.5, z_far=20.0, smooth_sigma_px=None,
+    )
+    assert col.shape == (32, 32)
+    assert float(col.max()) == pytest.approx(3.0)
+    assert float(col.sum()) == pytest.approx(3.0)
 
 
 def test_project_surface_density_camera_density_vs_mass_weights():
