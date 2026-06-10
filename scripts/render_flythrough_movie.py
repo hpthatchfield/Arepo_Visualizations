@@ -48,6 +48,7 @@ MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
 MASKED_FILL_PERCENTILES = (25.0, 90.0)
 MASKED_FILL_MASK_POWER = 1.0
 MASKED_FILL_BLEND_MODE = "detail"
+MASKED_FILL_DENSE_THRESHOLD = 0.35
 CODE_TIME_TO_MYR = 98.7
 
 
@@ -243,6 +244,7 @@ def project_surface_map(
         masked_fill_percentiles=MASKED_FILL_PERCENTILES,
         masked_fill_mask_power=MASKED_FILL_MASK_POWER,
         masked_fill_blend_mode=smooth_blend,
+        masked_fill_dense_threshold=MASKED_FILL_DENSE_THRESHOLD,
     )
     return sigma
 

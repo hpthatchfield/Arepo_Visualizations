@@ -95,10 +95,12 @@ def test_masked_fill_detail_blend_avoids_shadow_trough():
         percentiles=(0.0, 100.0),
         blend_mode="linear",
     )
-    # detail should never be below fill envelope (within float tolerance)
+    # detail should never be below fill envelope
     assert np.all(detail + 1e-12 >= fill)
     # linear blend often dips below fill near bright peaks
     assert np.any(linear < fill - 1e-6)
+    # dense peak should stay sharp (not replaced by wide blur)
+    assert detail[32, 32] >= 0.95 * sigma[32, 32]
 
 
 def test_project_surface_density_camera_masked_fill():

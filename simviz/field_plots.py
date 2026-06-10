@@ -214,6 +214,7 @@ def masked_fill_mass_map(
     percentiles=(20.0, 85.0),
     mask_power=1.0,
     blend_mode="linear",
+    dense_threshold=0.35,
 ):
     """Wide blur fill in low density; sharp (or raw) map in high density.
 
@@ -222,14 +223,18 @@ def masked_fill_mass_map(
     ``"linear"`` :
         ``w * base + (1 - w) * fill`` (legacy).
     ``"detail"`` :
-        ``fill + w * max(0, base - fill)`` — only adds structure above the
-        wide-blur envelope, avoiding dark halos where ``base < fill`` at
-        density boundaries.
+        Low-density pixels use ``fill + w * max(0, base - fill)`` so empty
+        regions stay filamentary without dark halos. Pixels with ``w >=
+        dense_threshold`` use the sharp/base map directly so extended
+        high-density structure is not washed out by the wide blur.
     """
     from scipy.ndimage import gaussian_filter
 
     if blend_mode not in ("linear", "detail"):
         raise ValueError("blend_mode must be 'linear' or 'detail'.")
+    dense_threshold = float(dense_threshold)
+    if not 0.0 <= dense_threshold <= 1.0:
+        raise ValueError("dense_threshold must be in [0, 1].")
 
     sigma = np.asarray(sigma, dtype=np.float64)
     if float(sigma_fill_px) <= 0.0:
@@ -270,7 +275,9 @@ def masked_fill_mass_map(
         w = w**mp
 
     if blend_mode == "detail":
-        return fill + w * np.maximum(0.0, base - fill)
+        low = fill + w * np.maximum(0.0, base - fill)
+        dense = w >= dense_threshold
+        return np.where(dense, np.maximum(base, fill), low)
     return w * base + (1.0 - w) * fill
 
 
@@ -297,6 +304,7 @@ def project_surface_density_camera(
     masked_fill_percentiles=(20.0, 85.0),
     masked_fill_mask_power=1.0,
     masked_fill_blend_mode="linear",
+    masked_fill_dense_threshold=0.35,
     *,
     masses=None,
 ):
@@ -364,6 +372,7 @@ def project_surface_density_camera(
             percentiles=masked_fill_percentiles,
             mask_power=masked_fill_mask_power,
             blend_mode=masked_fill_blend_mode,
+            dense_threshold=masked_fill_dense_threshold,
         )
     elif adaptive_smooth_sigmas is not None:
         if len(adaptive_smooth_sigmas) != 2:
