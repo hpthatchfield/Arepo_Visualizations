@@ -22,6 +22,7 @@ sys.path.insert(0, str(_PKG_ROOT))
 
 from scripts.render_flythrough_movie import (
     CODE_TIME_TO_MYR,
+    DEFAULT_CMAP,
     MASKED_FILL_BLEND_MODE,
     PATH_KEYFRAMES,
     PROJECTION_METHOD,
@@ -37,6 +38,7 @@ from scripts.render_flythrough_movie import (
     snap_num_from_name,
     write_png,
 )
+from simviz.colormaps import resolve_cmap
 
 project_mass_map = project_flythrough_map
 
@@ -74,7 +76,7 @@ def _write_compare_png(sigma_raw, sigma_smoothed, out_path, vmin, vmax):
             origin="lower",
             extent=(-1, 1, -1, 1),
             norm=colors.LogNorm(vmin=vmin, vmax=vmax),
-            cmap="inferno",
+            cmap=resolve_cmap(DEFAULT_CMAP),
             interpolation="nearest",
         )
         ax.set_title(label)

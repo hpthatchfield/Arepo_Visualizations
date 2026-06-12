@@ -34,6 +34,7 @@ _PKG_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PKG_ROOT))
 
 from simviz.field_plots import project_column_density_camera, project_surface_density_camera
+from simviz.colormaps import resolve_cmap
 from simviz.projections import rotate_about_axis, rotate_to_bar_frame
 from simviz.utils import read_snapshot_hdf5
 
@@ -42,7 +43,10 @@ SNAP_PREFIX = "phoenix_stinks_1Msun"
 FOV_X_DEG = 55.0
 NX, NY = 700, 700
 Z_NEAR, Z_FAR = 0.2, 30.0
-VMIN, VMAX = 5e-4, 2e1
+VMIN, VMAX = 1e-2, 2e1
+COLOR_VMIN_PERCENTILE = 10.0
+COLOR_VMAX_PERCENTILE = 99.0
+VMIN_FLOOR = 1e-2
 MASKED_FILL_SIGMAS = (0.0, 12.0)
 MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
 MASKED_FILL_PERCENTILES = (25.0, 90.0)
@@ -55,6 +59,8 @@ COLUMN_SMOOTH_SIGMA_PX = 0.5
 CODE_TIME_TO_MYR = 98.7
 
 PROJECTION_METHODS = ("surface", "column")
+ARRAYS_SUBDIR = "arrays"
+DEFAULT_CMAP = "pride"
 
 
 def _log(msg=""):
@@ -144,13 +150,17 @@ DEFAULT_EDGE_ORBIT_KEYFRAMES = (
 )
 
 # Far-out galaxy view -> zoom to CMZ -> partial orbit -> dip to edge-on and hold.
+# Zoom completes at fraction 0.22 (fast camera + fast snap advance); orbit/GC phase
+# from 0.22 onward uses --frames-per-snap for detailed evolution.
 DEFAULT_ZOOM_OBSERVE_KEYFRAMES = (
-    (0.00, 22.0, 0.0, 50.0),     # far out, whole-disk context
-    (0.40, 9.0, 0.0, 35.0),      # zoom toward the center
+    (0.00, 32.0, 0.0, 50.0),     # far out — more outer disk in view
+    (0.22, 9.0, 0.0, 35.0),      # quick zoom to the center (was 0.40 / r=22)
     (0.60, 8.0, 55.0, 35.0),     # partial rotation (~55 deg)
     (0.85, 9.0, 70.0, 8.0),      # dip toward the midplane
     (1.00, 9.0, 70.0, 0.0),      # end edge-on (mock observational view)
 )
+ZOOM_OBSERVE_ZOOM_END_FRACTION = 0.22
+ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM = 8
 
 PATH_KEYFRAMES = {
     "cinematic": DEFAULT_CINEMATIC_KEYFRAMES,
@@ -227,6 +237,45 @@ def build_camera_path(path, n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt
     ), None
 
 
+def build_snap_indices(n_frames, n_snaps, path, frames_per_snap=2):
+    """Map each frame index to a snapshot list index.
+
+    For ``zoom-observe``, snapshots advance quickly during the zoom-in phase
+    (``ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM``) and at ``frames_per_snap`` afterward
+    so simulation evolution is easier to follow near the GC.
+    """
+    indices = np.zeros(n_frames, dtype=int)
+    if path != "zoom-observe":
+        for i in range(n_frames):
+            indices[i] = min(i // frames_per_snap, n_snaps - 1)
+        return indices
+
+    zoom_end = max(1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames)))
+    snap = 0
+    since_change = 0
+    for i in range(n_frames):
+        if i == zoom_end:
+            since_change = 0
+        indices[i] = min(snap, n_snaps - 1)
+        in_zoom = i < zoom_end
+        block = (
+            ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM if in_zoom else frames_per_snap
+        )
+        since_change += 1
+        if since_change >= block and snap < n_snaps - 1:
+            snap += 1
+            since_change = 0
+    return indices
+
+
+def max_snap_index_used(snap_indices, frame_end):
+    """Highest snapshot index referenced through ``frame_end - 1``."""
+    if frame_end <= 0:
+        return 0
+    end = min(frame_end, len(snap_indices))
+    return int(snap_indices[end - 1])
+
+
 def project_surface_map(
     x, y, z, weights, cam, smooth=True, up=(0.0, 0.0, 1.0),
     smooth_blend=MASKED_FILL_BLEND_MODE,
@@ -294,19 +343,80 @@ def project_flythrough_map(
 project_mass_map = project_flythrough_map
 
 
-def color_limits(sigma, vmin_floor=1e-6):
+def color_limits(
+    sigma,
+    vmin_floor=VMIN_FLOOR,
+    vmin_percentile=COLOR_VMIN_PERCENTILE,
+    vmax_percentile=COLOR_VMAX_PERCENTILE,
+):
     """Log-scale limits from positive pixels (same as preview_flythrough_frame)."""
     pos = sigma[sigma > 0]
     if pos.size == 0:
         return VMIN, VMAX
-    vmin = max(float(np.percentile(pos, 1)), vmin_floor)
-    vmax = float(np.percentile(pos, 99.5))
+    vmin = max(float(np.percentile(pos, vmin_percentile)), vmin_floor)
+    vmax = float(np.percentile(pos, vmax_percentile))
     if vmax <= vmin:
         vmax = vmin * 10.0
     return vmin, vmax
 
 
-def write_png(sigma, out_path, vmin, vmax, title=None, time_myr=None):
+def frame_index_from_array_name(path):
+    m = re.search(r"frame_(\d+)\.npz$", Path(path).name, re.I)
+    if not m:
+        raise ValueError(f"expected frame_<N>.npz, got {Path(path).name}")
+    return int(m.group(1))
+
+
+def frame_array_path(output_dir, frame_index):
+    return Path(output_dir) / ARRAYS_SUBDIR / f"frame_{frame_index:04d}.npz"
+
+
+def arrays_dir_for(output_dir):
+    return Path(output_dir) / ARRAYS_SUBDIR
+
+
+def save_frame_array(sigma, out_path, *, snap_number, time_myr, frame_index):
+    """Save a raw projection map for fast colormap / scale re-rendering."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        out_path,
+        sigma=np.asarray(sigma, dtype=np.float32),
+        snap_number=np.int32(snap_number),
+        time_myr=np.float64(time_myr),
+        frame_index=np.int32(frame_index),
+    )
+
+
+def load_frame_array(path):
+    with np.load(path) as data:
+        return {
+            "sigma": np.asarray(data["sigma"], dtype=np.float64),
+            "snap_number": int(data["snap_number"]),
+            "time_myr": float(data["time_myr"]),
+            "frame_index": int(data["frame_index"]),
+        }
+
+
+def list_frame_arrays(arrays_dir):
+    paths = sorted(
+        Path(arrays_dir).glob("frame_*.npz"),
+        key=frame_index_from_array_name,
+    )
+    if not paths:
+        raise FileNotFoundError(f"no frame_*.npz in {arrays_dir}")
+    return paths
+
+
+def write_png(
+    sigma,
+    out_path,
+    vmin,
+    vmax,
+    title=None,
+    time_myr=None,
+    cmap=DEFAULT_CMAP,
+):
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
     out[out <= 0] = vmin
@@ -317,7 +427,7 @@ def write_png(sigma, out_path, vmin, vmax, title=None, time_myr=None):
         origin="lower",
         extent=(-1, 1, -1, 1),
         norm=colors.LogNorm(vmin=vmin, vmax=vmax),
-        cmap="inferno",
+        cmap=resolve_cmap(cmap),
         interpolation="nearest",
     )
     if time_myr is not None:
@@ -407,6 +517,19 @@ def build_parser():
         help="surface: 2D image histogram + masked_fill; column (default): sum "
         "density along depth per pixel (like project_column_density_xy)",
     )
+    parser.add_argument(
+        "--save-arrays",
+        action="store_true",
+        help="also save raw projection maps as compressed .npz under "
+        "<output-dir>/arrays/ for fast colormap / scale iteration "
+        "(see render_flythrough_from_arrays.py)",
+    )
+    parser.add_argument(
+        "--skip-png",
+        action="store_true",
+        help="skip PNG output (use with --save-arrays to avoid duplicate work "
+        "during long projection runs)",
+    )
     return parser
 
 
@@ -427,8 +550,20 @@ def main():
     if args.progress_every < 1:
         _log("ERROR: --progress-every must be >= 1")
         sys.exit(1)
+    if args.skip_png and not args.save_arrays:
+        _log("ERROR: --skip-png requires --save-arrays")
+        sys.exit(1)
     n_render = frame_end - args.frame_start
-    if n_render > len(snap_paths) * args.frames_per_snap:
+    snap_indices = build_snap_indices(
+        args.n_frames, len(snap_paths), args.path, args.frames_per_snap
+    )
+    snaps_needed = max_snap_index_used(snap_indices, frame_end) + 1
+    if snaps_needed > len(snap_paths):
+        _log(
+            f"warning: frames through {frame_end - 1} need {snaps_needed} snaps "
+            f"but only {len(snap_paths)} available after filter; last snap will repeat"
+        )
+    elif n_render > len(snap_paths) * args.frames_per_snap and args.path != "zoom-observe":
         _log(
             f"warning: {n_render} frames need more snaps than available "
             f"({len(snap_paths)} after filter); last snap will repeat"
@@ -455,9 +590,21 @@ def main():
     _log(f"{len(snap_paths)} snaps after filter ({snap_lo} .. {snap_hi})")
     _log(f"camera path length: {args.n_frames}  render frames {args.frame_start} .. {frame_end - 1}")
     _log(f"frames_per_snap={args.frames_per_snap}  progress_every={args.progress_every}")
+    if args.path == "zoom-observe":
+        zoom_frames = max(1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * args.n_frames)))
+        _log(
+            f"zoom-observe pacing: frames 0..{zoom_frames - 1} use "
+            f"frames_per_snap={ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM}, "
+            f"then {zoom_frames}..{args.n_frames - 1} use frames_per_snap="
+            f"{args.frames_per_snap}"
+        )
     _log(f"projection_weight={args.projection_weight}  projection_method={args.projection_method}")
     if args.projection_method == "surface":
         _log(f"smooth_blend={args.smooth_blend}")
+    if args.save_arrays:
+        _log(f"arrays -> {arrays_dir_for(args.output_dir).resolve()}")
+    if args.skip_png:
+        _log("PNG output disabled (--skip-png)")
     _log(f"output -> {args.output_dir.resolve()}")
     _log("starting render loop...")
 
@@ -470,7 +617,7 @@ def main():
     t0 = time.time()
 
     for i in range(args.frame_start, frame_end):
-        sidx = min(i // args.frames_per_snap, len(snap_paths) - 1)
+        sidx = int(snap_indices[i])
         snap_n = snap_num_from_name(snap_paths[sidx], args.snap_prefix)
         if sidx != cached:
             snap_path = snap_paths[sidx]
@@ -497,10 +644,27 @@ def main():
             scale_locked = True
             _log(f"locked color scale from frame {i}: vmin={vmin:.4g}  vmax={vmax:.4g}")
 
-        out_path = args.output_dir / f"frame_{i:04d}.png"
-        title = f"frame {i:04d}  snap {snap_n}"
-        write_png(sigma, out_path, vmin, vmax, title=title,
-                  time_myr=float(header["Time"]) * CODE_TIME_TO_MYR)
+        if args.save_arrays:
+            array_path = frame_array_path(args.output_dir, i)
+            save_frame_array(
+                sigma,
+                array_path,
+                snap_number=snap_n,
+                time_myr=float(header["Time"]) * CODE_TIME_TO_MYR,
+                frame_index=i,
+            )
+
+        if not args.skip_png:
+            out_path = args.output_dir / f"frame_{i:04d}.png"
+            title = f"frame {i:04d}  snap {snap_n}"
+            write_png(
+                sigma,
+                out_path,
+                vmin,
+                vmax,
+                title=title,
+                time_myr=float(header["Time"]) * CODE_TIME_TO_MYR,
+            )
 
         done = i - args.frame_start + 1
         is_last = i == frame_end - 1

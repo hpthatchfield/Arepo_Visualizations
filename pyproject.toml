@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib",
     "h5py",
     "scipy",
+    "cmasher",
 ]
 
 [project.optional-dependencies]

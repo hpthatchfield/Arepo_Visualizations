@@ -11,10 +11,16 @@ from scripts.render_flythrough_movie import camera_path
 from scripts.render_flythrough_movie import (
     build_camera_path,
     build_parser,
+    build_snap_indices,
     cinematic_camera_path,
     color_limits,
     format_progress_line,
+    frame_array_path,
     list_snaps,
+    load_frame_array,
+    save_frame_array,
+    ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM,
+    ZOOM_OBSERVE_ZOOM_END_FRACTION,
 )
 
 
@@ -46,8 +52,18 @@ def test_color_limits_percentiles():
     sigma = np.logspace(-2, 2, 1000)
     vmin, vmax = color_limits(sigma)
     assert vmin > 0 and vmax > vmin
-    assert vmin <= np.percentile(sigma, 5)
-    assert vmax >= np.percentile(sigma, 95)
+    assert vmin >= max(
+        np.percentile(sigma, movie.COLOR_VMIN_PERCENTILE),
+        movie.VMIN_FLOOR,
+    )
+    assert vmax >= np.percentile(sigma, movie.COLOR_VMAX_PERCENTILE - 1)
+
+
+def test_resolve_cmap_cmasher_pride():
+    from simviz.colormaps import resolve_cmap
+
+    cmap = resolve_cmap("pride")
+    assert hasattr(cmap, "name")
 
 
 def test_frames_per_snap_index():
@@ -152,13 +168,64 @@ def test_zoom_observe_path_endpoints():
     pts, _ = build_camera_path("zoom-observe", 240)
     r0 = np.linalg.norm(pts[0])
     r_end = np.linalg.norm(pts[-1])
-    assert r0 > r_end + 5.0                         # starts far out, ends closer
+    assert np.isclose(r0, 32.0, atol=0.5)          # starts farther out
+    assert r0 > r_end + 5.0                         # ends much closer than start
     assert pts[0][2] > 5.0                          # starts well above the plane
     assert np.isclose(pts[-1][2], 0.0, atol=0.05)   # ends edge-on
     assert not np.allclose(pts[0], pts[-1], atol=1.0)  # does not loop back
+    zoom_frame = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * 240))
+    r_zoom = np.linalg.norm(pts[zoom_frame])
+    assert r_zoom < r0 - 10.0                       # zoom completes well before orbit
+
+
+def test_zoom_observe_snap_indices_advance_faster_during_zoom():
+    n_frames = 120
+    n_snaps = 100
+    indices = build_snap_indices(n_frames, n_snaps, "zoom-observe", frames_per_snap=2)
+    zoom_end = max(1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames)))
+    zoom_snaps = indices[zoom_end - 1] + 1
+    detail_span = n_frames - zoom_end
+    detail_snaps = indices[-1] - indices[zoom_end] + 1
+    zoom_rate = zoom_end / max(zoom_snaps, 1)
+    detail_rate = detail_span / max(detail_snaps, 1)
+    assert zoom_rate < detail_rate
+    assert zoom_rate <= ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM + 0.5
+    assert detail_rate >= 2.0 - 0.5
 
 
 def test_build_camera_path_orbit_has_no_ups():
     pts, ups = build_camera_path("orbit", 12)
     assert pts.shape == (12, 3)
     assert ups is None
+
+
+def test_save_and_load_frame_array(tmp_path):
+    sigma = np.logspace(-2, 2, 16).reshape(4, 4)
+    path = frame_array_path(tmp_path, 7)
+    save_frame_array(
+        sigma,
+        path,
+        snap_number=880,
+        time_myr=12.3,
+        frame_index=7,
+    )
+    loaded = load_frame_array(path)
+    assert loaded["frame_index"] == 7
+    assert loaded["snap_number"] == 880
+    assert loaded["time_myr"] == pytest.approx(12.3)
+    assert loaded["sigma"].shape == (4, 4)
+    assert np.allclose(loaded["sigma"], sigma, rtol=1e-5)
+
+
+def test_movie_save_arrays_flags():
+    args = build_parser().parse_args(["--snap-dir", "/tmp", "--save-arrays"])
+    assert args.save_arrays is True
+    assert args.skip_png is False
+
+
+def test_movie_skip_png_requires_save_arrays():
+    args = build_parser().parse_args(
+        ["--snap-dir", "/tmp", "--save-arrays", "--skip-png"]
+    )
+    assert args.skip_png is True
+    assert args.save_arrays is True

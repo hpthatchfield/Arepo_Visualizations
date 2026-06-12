@@ -1,6 +1,18 @@
 """Colormap and norm helpers."""
 
 import matplotlib.colors as colors
+import matplotlib.pyplot as plt
+
+
+def resolve_cmap(name):
+    """Return a matplotlib Colormap from a cmasher or matplotlib name."""
+    if not isinstance(name, str):
+        return name
+    import cmasher as cm
+
+    if hasattr(cm, name):
+        return getattr(cm, name)
+    return plt.get_cmap(name)
 
 
 def make_lognorm(vmin, vmax):
