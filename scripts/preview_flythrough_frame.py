@@ -43,6 +43,17 @@ from simviz.colormaps import resolve_cmap
 project_mass_map = project_flythrough_map
 
 
+def resolve_preview_output(output, *, path, frame_index, tag=None):
+    """Pick a preview PNG path that avoids accidental overwrites."""
+    if output is not None:
+        return Path(output)
+    parts = [path, f"f{frame_index:04d}"]
+    if tag:
+        parts.append(tag)
+    stem = "flythrough_preview_" + "_".join(parts)
+    return _PKG_ROOT / "example_output" / f"{stem}.png"
+
+
 def describe_map(sigma, label):
     """Print stage stats useful for diagnosing washed-out frames."""
     arr = np.asarray(sigma, dtype=np.float64)
@@ -103,6 +114,12 @@ def build_parser():
         "--r-start/--r-end/--n-turns/--tilt-deg",
     )
     parser.add_argument("-o", "--output", type=Path, default=None)
+    parser.add_argument(
+        "--tag",
+        default=None,
+        help="suffix for the auto-generated output name (with --path and "
+        "--frame-index); ignored when -o is set",
+    )
     parser.add_argument("--r-start", type=float, default=12.0)
     parser.add_argument("--r-end", type=float, default=6.0)
     parser.add_argument("--n-turns", type=float, default=1.5)
@@ -163,9 +180,12 @@ def main():
         print(f"ERROR: not found: {snap_path}")
         sys.exit(1)
 
-    out_path = args.output
-    if out_path is None:
-        out_path = _PKG_ROOT / "example_output" / "flythrough_preview.png"
+    out_path = resolve_preview_output(
+        args.output,
+        path=args.path,
+        frame_index=args.frame_index,
+        tag=args.tag,
+    )
 
     print(f"loading {snap_path}")
     x, y, z, weights, header = load_gas_bar(

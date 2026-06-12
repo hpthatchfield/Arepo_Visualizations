@@ -1,11 +1,14 @@
 """flythrough script helpers"""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 import scripts.preview_flythrough_frame as preview
 import scripts.render_flythrough_movie as movie
 from scripts.preview_flythrough_frame import build_parser as build_preview_parser
+from scripts.preview_flythrough_frame import resolve_preview_output
 from scripts.preview_flythrough_frame import snap_num_from_name
 from scripts.render_flythrough_movie import camera_path
 from scripts.render_flythrough_movie import (
@@ -229,3 +232,27 @@ def test_movie_skip_png_requires_save_arrays():
     )
     assert args.skip_png is True
     assert args.save_arrays is True
+
+
+def test_preview_auto_output_name():
+    path = resolve_preview_output(
+        None, path="zoom-observe", frame_index=264, tag=None
+    )
+    assert path.name == "flythrough_preview_zoom-observe_f0264.png"
+
+
+def test_preview_auto_output_name_with_tag():
+    path = resolve_preview_output(
+        None, path="zoom-observe", frame_index=0, tag="far_out"
+    )
+    assert path.name == "flythrough_preview_zoom-observe_f0000_far_out.png"
+
+
+def test_preview_explicit_output_ignores_tag():
+    path = resolve_preview_output(
+        Path("custom.png"),
+        path="zoom-observe",
+        frame_index=0,
+        tag="ignored",
+    )
+    assert path == Path("custom.png")
