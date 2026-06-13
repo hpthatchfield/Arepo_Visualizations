@@ -33,7 +33,11 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _PKG_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PKG_ROOT))
 
-from simviz.field_plots import project_column_density_camera, project_surface_density_camera
+from simviz.field_plots import (
+    fill_sparse_column_map,
+    project_column_density_camera,
+    project_surface_density_camera,
+)
 from simviz.colormaps import resolve_cmap
 from simviz.projections import rotate_about_axis, rotate_to_bar_frame
 from simviz.utils import read_snapshot_hdf5
@@ -56,6 +60,11 @@ MASKED_FILL_DENSE_THRESHOLD = 0.35
 PROJECTION_METHOD = "column"
 COLUMN_DEPTH_BINS = 48
 COLUMN_SMOOTH_SIGMA_PX = 0.4
+COLUMN_SPARSE_FILL_SIGMA_PX = 3.0
+COLUMN_SPARSE_THRESHOLD_PERCENTILE = 25.0
+# Code density sum × sightline depth (100 pc units) → M☉ pc⁻² (see field_plots three-panel).
+SIGMA_CODE_TO_MSUN_PC2 = (Z_FAR - Z_NEAR) / 1.0e4
+SIGMA_COLORBAR_LABEL = r"$\Sigma$ [M$_\odot\,\mathrm{pc}^{-2}$]"
 CODE_TIME_TO_MYR = 98.7
 
 PROJECTION_METHODS = ("surface", "column")
@@ -374,6 +383,12 @@ def project_flythrough_map(
             z_far=Z_FAR,
             smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
         )
+        if smooth:
+            sigma = fill_sparse_column_map(
+                sigma,
+                threshold_percentile=COLUMN_SPARSE_THRESHOLD_PERCENTILE,
+                fill_sigma_px=COLUMN_SPARSE_FILL_SIGMA_PX,
+            )
         return sigma
     if projection_method == "surface":
         return project_surface_map(
@@ -450,6 +465,11 @@ def list_frame_arrays(arrays_dir):
     return paths
 
 
+def sigma_code_to_msun_pc2(sigma):
+    """Convert column-histogram sums to surface density in M☉ pc⁻²."""
+    return np.asarray(sigma, dtype=np.float64) * SIGMA_CODE_TO_MSUN_PC2
+
+
 def write_png(
     sigma,
     out_path,
@@ -458,20 +478,30 @@ def write_png(
     title=None,
     time_myr=None,
     cmap=DEFAULT_CMAP,
+    show_colorbar=True,
+    colorbar_label=SIGMA_COLORBAR_LABEL,
 ):
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
     out[out <= 0] = vmin
+    display = sigma_code_to_msun_pc2(out)
+    disp_vmin = vmin * SIGMA_CODE_TO_MSUN_PC2
+    disp_vmax = vmax * SIGMA_CODE_TO_MSUN_PC2
 
-    fig, ax = plt.subplots(1, 1, figsize=(6, 6), dpi=150)
-    ax.imshow(
-        out,
+    fig, ax = plt.subplots(1, 1, figsize=(6.2, 6), dpi=150)
+    im = ax.imshow(
+        display,
         origin="lower",
         extent=(-1, 1, -1, 1),
-        norm=colors.LogNorm(vmin=vmin, vmax=vmax),
+        norm=colors.LogNorm(vmin=disp_vmin, vmax=disp_vmax),
         cmap=resolve_cmap(cmap),
         interpolation="nearest",
     )
+    if show_colorbar:
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(colorbar_label, fontsize=10)
+    ax.set_xticks([])
+    ax.set_yticks([])
     if time_myr is not None:
         ax.text(0.02, 0.98, f"{time_myr:.1f} Myr", transform=ax.transAxes,
                 color="white", ha="left", va="top", fontsize=12)

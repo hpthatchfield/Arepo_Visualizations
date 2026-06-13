@@ -5,6 +5,7 @@ import pytest
 
 from simviz.field_plots import (
     adaptive_gaussian_blend_mass_map,
+    fill_sparse_column_map,
     masked_fill_mass_map,
     project_column_density_camera,
     project_surface_density_camera,
@@ -171,6 +172,22 @@ def test_project_column_density_camera_sums_along_depth():
     assert col.shape == (32, 32)
     assert float(col.max()) == pytest.approx(3.0)
     assert float(col.sum()) == pytest.approx(3.0)
+
+
+def test_fill_sparse_column_map_smooths_low_pixels_only():
+    rng = np.random.default_rng(7)
+    sigma = rng.uniform(1e-4, 5e-3, (48, 48))
+    sigma[24, 24] = 50.0
+    peak_before = sigma[24, 24]
+    out = fill_sparse_column_map(
+        sigma,
+        threshold_percentile=30.0,
+        fill_sigma_px=4.0,
+    )
+    low = sigma < np.percentile(sigma[sigma > 0], 30.0)
+    assert np.std(out[low]) < np.std(sigma[low])
+    assert out[24, 24] == pytest.approx(peak_before)
+    assert out.max() >= 0.95 * peak_before
 
 
 def test_project_surface_density_camera_density_vs_mass_weights():

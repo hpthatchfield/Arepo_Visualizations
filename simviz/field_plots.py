@@ -206,6 +206,39 @@ def adaptive_gaussian_blend_mass_map(
     return w * sharp + (1.0 - w) * smooth
 
 
+def fill_sparse_column_map(
+    sigma,
+    *,
+    threshold=None,
+    threshold_percentile=25.0,
+    fill_sigma_px=3.0,
+):
+    """Replace only low projected values with a wider Gaussian smooth.
+
+    Pixels at or above ``threshold`` are left unchanged so high-density structure
+    is not blended with the fill. Empty bins are filled from neighbours.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    sigma = np.asarray(sigma, dtype=np.float64)
+    if fill_sigma_px is None or float(fill_sigma_px) <= 0.0:
+        return sigma
+    if np.all(sigma <= 0.0):
+        return sigma
+
+    fill = gaussian_filter(sigma, sigma=float(fill_sigma_px), mode="nearest")
+    pos = sigma[sigma > 0]
+    if threshold is None:
+        if pos.size == 0:
+            return fill
+        threshold = float(np.percentile(pos, threshold_percentile))
+
+    sparse = (sigma <= 0.0) | (sigma < threshold)
+    out = sigma.copy()
+    out[sparse] = fill[sparse]
+    return out
+
+
 def masked_fill_mass_map(
     sigma,
     sigma_fill_px,
