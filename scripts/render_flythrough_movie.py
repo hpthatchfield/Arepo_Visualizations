@@ -39,7 +39,11 @@ from simviz.field_plots import (
 )
 from simviz.colormaps import resolve_cmap
 from simviz.projections import rotate_about_axis, rotate_to_bar_frame
-from simviz.utils import read_snapshot_hdf5
+from simviz.utils import (
+    code_density_sum_to_n_mol_cm2,
+    n_mol_cm2_to_code_density_sum,
+    read_snapshot_hdf5,
+)
 
 # tune these (match preview_flythrough_frame.py)
 SNAP_PREFIX = "phoenix_stinks_1Msun"
@@ -59,12 +63,17 @@ PROJECTION_METHOD = "column"
 COLUMN_DEPTH_BINS = 48
 COLUMN_DEPOSIT = "linear_xy"
 COLUMN_SMOOTH_SIGMA_PX = 0.35
-# Code density sum × sightline depth (100 pc units) → M☉ pc⁻² (see field_plots three-panel).
-SIGMA_CODE_TO_MSUN_PC2 = (Z_FAR - Z_NEAR) / 1.0e4
-SIGMA_DISPLAY_FLOOR_MSUN_PC2 = 10.0
-VMIN_FLOOR = SIGMA_DISPLAY_FLOOR_MSUN_PC2 / SIGMA_CODE_TO_MSUN_PC2
+COLUMN_DEPTH_CODE = Z_FAR - Z_NEAR
+# Log-scale display floor in cm⁻² (~10 M☉ pc⁻² under default sightline depth).
+SIGMA_DISPLAY_FLOOR_N_MOL_CM2 = 5.4e20
+VMIN_FLOOR = n_mol_cm2_to_code_density_sum(
+    SIGMA_DISPLAY_FLOOR_N_MOL_CM2, COLUMN_DEPTH_CODE
+)
 VMIN = VMIN_FLOOR
-SIGMA_COLORBAR_LABEL = r"$\Sigma$ [M$_\odot\,\mathrm{pc}^{-2}$]"
+SIGMA_CODE_TO_N_MOL_CM2 = float(
+    code_density_sum_to_n_mol_cm2(1.0, COLUMN_DEPTH_CODE)
+)
+SIGMA_COLORBAR_LABEL = r"$N_\mathrm{mol}$ [cm$^{-2}$]"
 CODE_TIME_TO_MYR = 98.7
 
 PROJECTION_METHODS = ("surface", "column")
@@ -460,9 +469,9 @@ def list_frame_arrays(arrays_dir):
     return paths
 
 
-def sigma_code_to_msun_pc2(sigma):
-    """Convert column-histogram sums to surface density in M☉ pc⁻²."""
-    return np.asarray(sigma, dtype=np.float64) * SIGMA_CODE_TO_MSUN_PC2
+def sigma_code_to_n_mol_cm2(sigma):
+    """Convert column-histogram sums to μ-weighted particle column density (cm⁻²)."""
+    return code_density_sum_to_n_mol_cm2(sigma, COLUMN_DEPTH_CODE)
 
 
 def write_png(
@@ -479,9 +488,9 @@ def write_png(
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
     out[out <= 0] = vmin
-    display = sigma_code_to_msun_pc2(out)
-    disp_vmin = vmin * SIGMA_CODE_TO_MSUN_PC2
-    disp_vmax = vmax * SIGMA_CODE_TO_MSUN_PC2
+    display = sigma_code_to_n_mol_cm2(out)
+    disp_vmin = vmin * SIGMA_CODE_TO_N_MOL_CM2
+    disp_vmax = vmax * SIGMA_CODE_TO_N_MOL_CM2
 
     fig, ax = plt.subplots(1, 1, figsize=(6.2, 6), dpi=150)
     im = ax.imshow(

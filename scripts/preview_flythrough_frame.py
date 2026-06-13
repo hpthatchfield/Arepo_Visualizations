@@ -30,7 +30,7 @@ from scripts.render_flythrough_movie import (
     PROJECTION_METHOD,
     PROJECTION_METHODS,
     PROJECTION_WEIGHT_FIELDS,
-    SIGMA_CODE_TO_MSUN_PC2,
+    SIGMA_CODE_TO_N_MOL_CM2,
     SIGMA_COLORBAR_LABEL,
     SNAP_PREFIX,
     VMAX,
@@ -78,8 +78,8 @@ def describe_map(sigma, label):
 
 def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, vmax):
     """Side-by-side nearest vs production column deposit at one color scale."""
-    disp_vmin = vmin * SIGMA_CODE_TO_MSUN_PC2
-    disp_vmax = vmax * SIGMA_CODE_TO_MSUN_PC2
+    disp_vmin = vmin * SIGMA_CODE_TO_N_MOL_CM2
+    disp_vmax = vmax * SIGMA_CODE_TO_N_MOL_CM2
     prod_label = (
         f"production ({COLUMN_DEPOSIT} + "
         f"σ={COLUMN_SMOOTH_SIGMA_PX:g}px blur)"
@@ -94,7 +94,7 @@ def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, 
         out[~np.isfinite(out)] = vmin
         out[out <= 0] = vmin
         last_im = ax.imshow(
-            out * SIGMA_CODE_TO_MSUN_PC2,
+            out * SIGMA_CODE_TO_N_MOL_CM2,
             origin="lower",
             extent=(-1, 1, -1, 1),
             norm=colors.LogNorm(vmin=disp_vmin, vmax=disp_vmax),

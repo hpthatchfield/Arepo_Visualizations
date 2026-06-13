@@ -38,6 +38,56 @@ CONSTANTS["arepoBfield"] = (
 )
 
 
+def code_density_sum_to_msun_pc2(density_sum_code, depth_code):
+    """Gas surface density (M☉ pc⁻²) from summed code ``Density`` along depth.
+
+    Same scaling as ``field_plots.plot_threepanel_bfield`` (``* dpix / 1e4``).
+    """
+    C = CONSTANTS
+    return (
+        np.asarray(density_sum_code, dtype=np.float64)
+        * depth_code
+        * C["msun2g"]
+        / (C["pc2cm"] ** 2 * 1.0e4)
+    )
+
+
+def code_density_sum_to_column_g_cm2(density_sum_code, depth_code):
+    """Gas mass column density (g cm⁻²) from summed code ``Density`` along depth."""
+    C = CONSTANTS
+    return np.asarray(density_sum_code, dtype=np.float64) * depth_code * C["arepoColumnDensity"]
+
+
+def code_density_sum_to_n_mol_cm2(density_sum_code, depth_code, mu=None):
+    """Equivalent total-particle column density (cm⁻²) from summed code ``Density``.
+
+    The ``Density`` field is total gas mass density (H, He, metals, etc.). This
+    converts the projected mass column Σ to an ambiguous molecule/particle column
+    via ``N = Σ / (μ m_H)`` using the mean molecular weight ``μ`` (default
+    ``CONSTANTS['mu']``). It is **not** H-only or H₂-only unless the gas is
+    purely molecular hydrogen at that ``μ``.
+    """
+    C = CONSTANTS
+    if mu is None:
+        mu = C["mu"]
+    sigma_g = code_density_sum_to_column_g_cm2(density_sum_code, depth_code)
+    return sigma_g / (mu * C["mH"])
+
+
+def n_mol_cm2_to_code_density_sum(n_mol_cm2, depth_code, mu=None):
+    """Inverse of ``code_density_sum_to_n_mol_cm2`` for display floors and limits."""
+    C = CONSTANTS
+    if mu is None:
+        mu = C["mu"]
+    sigma_g = np.asarray(n_mol_cm2, dtype=np.float64) * mu * C["mH"]
+    return sigma_g / (depth_code * C["arepoColumnDensity"])
+
+
+# Backward-compatible aliases (misleading name; prefer ``*_n_mol_*``).
+code_density_sum_to_n_h_cm2 = code_density_sum_to_n_mol_cm2
+n_h_cm2_to_code_density_sum = n_mol_cm2_to_code_density_sum
+
+
 def calc_lambda_jeans(rho_cgs, cs_kms):
     """Compute the Jeans length in cm."""
     cs_cgs = cs_kms * 1e5
