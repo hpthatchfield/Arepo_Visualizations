@@ -239,6 +239,88 @@ def fill_sparse_column_map(
     return out
 
 
+def _deposit_column_histogram_3d(
+    x_img,
+    y_img,
+    z_vals,
+    weights,
+    nx,
+    ny,
+    nz,
+    z_lo,
+    z_hi,
+    deposit="nearest",
+):
+    """Accumulate cell weights into a (nx, ny, nz) histogram.
+
+    ``nearest`` uses ``numpy.histogramdd`` (one bin per cell center).
+    ``linear_xy`` splats each cell bilinearly in image space (CIC) with nearest
+    depth bin — fills gaps between Voronoi seeds without a wide post blur.
+    ``linear`` uses full trilinear splat in (u, v, depth).
+    """
+    x_img = np.asarray(x_img, dtype=np.float64)
+    y_img = np.asarray(y_img, dtype=np.float64)
+    z_vals = np.asarray(z_vals, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64)
+    nx, ny, nz = int(nx), int(ny), int(nz)
+
+    if deposit == "nearest":
+        samples = np.column_stack([x_img, y_img, z_vals])
+        sigma_3d, _ = np.histogramdd(
+            samples,
+            bins=(nx, ny, nz),
+            range=((-1.0, 1.0), (-1.0, 1.0), (z_lo, z_hi)),
+            weights=weights,
+        )
+        return np.asarray(sigma_3d, dtype=np.float64)
+
+    if deposit not in ("linear_xy", "linear"):
+        raise ValueError("deposit must be 'nearest', 'linear_xy', or 'linear'.")
+
+    sigma_3d = np.zeros((nx, ny, nz), dtype=np.float64)
+    fx = np.clip((x_img + 1.0) * 0.5 * nx, 0.0, float(nx) - 1.001)
+    fy = np.clip((y_img + 1.0) * 0.5 * ny, 0.0, float(ny) - 1.001)
+    fz = np.clip((z_vals - z_lo) / (z_hi - z_lo) * nz, 0.0, float(nz) - 1.001)
+
+    i0 = np.floor(fx).astype(np.intp)
+    j0 = np.floor(fy).astype(np.intp)
+    k0 = np.floor(fz).astype(np.intp)
+    tx = fx - i0
+    ty = fy - j0
+    tz = fz - k0
+
+    if deposit == "linear_xy":
+        corners = (
+            (0, 0, 1.0 - tx, 1.0 - ty),
+            (1, 0, tx, 1.0 - ty),
+            (0, 1, 1.0 - tx, ty),
+            (1, 1, tx, ty),
+        )
+        for di, dj, wx, wy in corners:
+            ii = np.clip(i0 + di, 0, nx - 1)
+            jj = np.clip(j0 + dj, 0, ny - 1)
+            kk = np.clip(k0, 0, nz - 1)
+            np.add.at(sigma_3d, (ii, jj, kk), weights * wx * wy)
+    else:
+        corners = (
+            (0, 0, 0, 1.0 - tx, 1.0 - ty, 1.0 - tz),
+            (1, 0, 0, tx, 1.0 - ty, 1.0 - tz),
+            (0, 1, 0, 1.0 - tx, ty, 1.0 - tz),
+            (1, 1, 0, tx, ty, 1.0 - tz),
+            (0, 0, 1, 1.0 - tx, 1.0 - ty, tz),
+            (1, 0, 1, tx, 1.0 - ty, tz),
+            (0, 1, 1, 1.0 - tx, ty, tz),
+            (1, 1, 1, tx, ty, tz),
+        )
+        for di, dj, dk, wx, wy, wz in corners:
+            ii = np.clip(i0 + di, 0, nx - 1)
+            jj = np.clip(j0 + dj, 0, ny - 1)
+            kk = np.clip(k0 + dk, 0, nz - 1)
+            np.add.at(sigma_3d, (ii, jj, kk), weights * wx * wy * wz)
+
+    return sigma_3d
+
+
 def masked_fill_mass_map(
     sigma,
     sigma_fill_px,
@@ -444,6 +526,7 @@ def project_column_density_camera(
     z_near=1e-3,
     z_far=None,
     smooth_sigma_px=None,
+    deposit="nearest",
     *,
     masses=None,
 ):
@@ -453,6 +536,10 @@ def project_column_density_camera(
     ``weights`` (typically density in code units) along the camera forward axis.
     Particles that project to the same pixel but sit at different depths are
     summed rather than splatted as a single surface layer.
+
+    ``deposit='linear_xy'`` (recommended for flythrough movies) bilinearly
+    spreads each cell over neighbouring image pixels at deposit time, which
+    reduces Voronoi seed grain in low-density regions without a wide post blur.
     """
     from .projections import world_to_camera
 
@@ -495,12 +582,12 @@ def project_column_density_camera(
     if z_hi <= z_lo:
         z_hi = z_lo + 1.0
 
-    samples = np.column_stack([x_img[in_view], y_img[in_view], z_vals[in_view]])
-    sigma_3d, _ = np.histogramdd(
-        samples,
-        bins=(nx, ny, nz),
-        range=((-1.0, 1.0), (-1.0, 1.0), (z_lo, z_hi)),
-        weights=w_vals[in_view],
+    xi = x_img[in_view]
+    yi = y_img[in_view]
+    zi = z_vals[in_view]
+    wi = w_vals[in_view]
+    sigma_3d = _deposit_column_histogram_3d(
+        xi, yi, zi, wi, nx, ny, nz, z_lo, z_hi, deposit=deposit,
     )
     sigma = np.asarray(sigma_3d, dtype=np.float64).sum(axis=2).T
 

@@ -174,6 +174,29 @@ def test_project_column_density_camera_sums_along_depth():
     assert float(col.sum()) == pytest.approx(3.0)
 
 
+def test_linear_xy_deposit_reduces_speckle_preserves_peak():
+    rng = np.random.default_rng(8)
+    n = 600
+    x = rng.uniform(-3.0, 3.0, n)
+    y = rng.uniform(-3.0, 3.0, n)
+    z = rng.uniform(3.0, 15.0, n)
+    rho = rng.uniform(1e-4, 3e-3, n)
+    rho[280:320] += rng.uniform(2.0, 8.0, 40)
+    cam = np.array([6.0, 2.0, -10.0])
+
+    near, _ = project_column_density_camera(
+        x, y, z, rho, camera_position=cam, nx=48, ny=48, nz=10, z_far=80.0,
+        deposit="nearest", smooth_sigma_px=None,
+    )
+    linear, _ = project_column_density_camera(
+        x, y, z, rho, camera_position=cam, nx=48, ny=48, nz=10, z_far=80.0,
+        deposit="linear_xy", smooth_sigma_px=None,
+    )
+    low = near < np.percentile(near[near > 0], 35.0)
+    assert np.std(linear[low]) < np.std(near[low])
+    assert linear.max() >= 0.85 * near.max()
+
+
 def test_fill_sparse_column_map_smooths_low_pixels_only():
     rng = np.random.default_rng(7)
     sigma = rng.uniform(1e-4, 5e-3, (48, 48))

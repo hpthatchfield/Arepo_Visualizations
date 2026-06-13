@@ -34,7 +34,6 @@ _PKG_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PKG_ROOT))
 
 from simviz.field_plots import (
-    fill_sparse_column_map,
     project_column_density_camera,
     project_surface_density_camera,
 )
@@ -58,9 +57,8 @@ MASKED_FILL_BLEND_MODE = "detail"
 MASKED_FILL_DENSE_THRESHOLD = 0.35
 PROJECTION_METHOD = "column"
 COLUMN_DEPTH_BINS = 48
-COLUMN_SMOOTH_SIGMA_PX = 0.4
-COLUMN_SPARSE_FILL_SIGMA_PX = 3.0
-COLUMN_SPARSE_THRESHOLD_PERCENTILE = 25.0
+COLUMN_DEPOSIT = "linear_xy"
+COLUMN_SMOOTH_SIGMA_PX = 0.35
 # Code density sum × sightline depth (100 pc units) → M☉ pc⁻² (see field_plots three-panel).
 SIGMA_CODE_TO_MSUN_PC2 = (Z_FAR - Z_NEAR) / 1.0e4
 SIGMA_DISPLAY_FLOOR_MSUN_PC2 = 10.0
@@ -384,13 +382,8 @@ def project_flythrough_map(
             z_near=Z_NEAR,
             z_far=Z_FAR,
             smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
+            deposit=COLUMN_DEPOSIT if smooth else "nearest",
         )
-        if smooth:
-            sigma = fill_sparse_column_map(
-                sigma,
-                threshold_percentile=COLUMN_SPARSE_THRESHOLD_PERCENTILE,
-                fill_sigma_px=COLUMN_SPARSE_FILL_SIGMA_PX,
-            )
         return sigma
     if projection_method == "surface":
         return project_surface_map(
