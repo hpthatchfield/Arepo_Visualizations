@@ -55,12 +55,7 @@ MASKED_FILL_BLEND_MODE = "detail"
 MASKED_FILL_DENSE_THRESHOLD = 0.35
 PROJECTION_METHOD = "column"
 COLUMN_DEPTH_BINS = 48
-COLUMN_SMOOTH_SIGMA_PX = 0.5
-COLUMN_MASKED_FILL_SIGMAS = (COLUMN_SMOOTH_SIGMA_PX, 6.0)
-COLUMN_MASKED_FILL_WEIGHT_SIGMA_PX = 1.0
-COLUMN_MASKED_FILL_PERCENTILES = (15.0, 80.0)
-COLUMN_MASKED_FILL_BLEND_MODE = "detail"
-COLUMN_MASKED_FILL_DENSE_THRESHOLD = 0.35
+COLUMN_SMOOTH_SIGMA_PX = 0.4
 CODE_TIME_TO_MYR = 98.7
 
 PROJECTION_METHODS = ("surface", "column")
@@ -363,15 +358,6 @@ def project_flythrough_map(
 ):
     """Dispatch to surface splat (legacy) or column histogram integration."""
     if projection_method == "column":
-        smooth_kw = {}
-        if smooth:
-            smooth_kw = dict(
-                masked_fill_sigmas=COLUMN_MASKED_FILL_SIGMAS,
-                masked_fill_weight_sigma_px=COLUMN_MASKED_FILL_WEIGHT_SIGMA_PX,
-                masked_fill_percentiles=COLUMN_MASKED_FILL_PERCENTILES,
-                masked_fill_blend_mode=COLUMN_MASKED_FILL_BLEND_MODE,
-                masked_fill_dense_threshold=COLUMN_MASKED_FILL_DENSE_THRESHOLD,
-            )
         sigma, _ = project_column_density_camera(
             x,
             y,
@@ -386,7 +372,7 @@ def project_flythrough_map(
             nz=COLUMN_DEPTH_BINS,
             z_near=Z_NEAR,
             z_far=Z_FAR,
-            **smooth_kw,
+            smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
         )
         return sigma
     if projection_method == "surface":

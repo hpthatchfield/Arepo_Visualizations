@@ -411,15 +411,6 @@ def project_column_density_camera(
     z_near=1e-3,
     z_far=None,
     smooth_sigma_px=None,
-    adaptive_smooth_sigmas=None,
-    adaptive_weight_sigma_px=0.5,
-    adaptive_percentiles=(5.0, 95.0),
-    masked_fill_sigmas=None,
-    masked_fill_weight_sigma_px=0.5,
-    masked_fill_percentiles=(20.0, 85.0),
-    masked_fill_mask_power=1.0,
-    masked_fill_blend_mode="linear",
-    masked_fill_dense_threshold=0.35,
     *,
     masses=None,
 ):
@@ -429,9 +420,6 @@ def project_column_density_camera(
     ``weights`` (typically density in code units) along the camera forward axis.
     Particles that project to the same pixel but sit at different depths are
     summed rather than splatted as a single surface layer.
-
-    Optional post-smoothing: uniform ``smooth_sigma_px``, ``adaptive_smooth_sigmas``,
-    or ``masked_fill_sigmas`` (only one of the latter two).
     """
     from .projections import world_to_camera
 
@@ -483,48 +471,10 @@ def project_column_density_camera(
     )
     sigma = np.asarray(sigma_3d, dtype=np.float64).sum(axis=2).T
 
-    if masked_fill_sigmas is not None and adaptive_smooth_sigmas is not None:
-        raise ValueError(
-            "Set only one of masked_fill_sigmas or adaptive_smooth_sigmas, not both."
-        )
     if smooth_sigma_px is not None and float(smooth_sigma_px) > 0.0:
-        if masked_fill_sigmas is not None or adaptive_smooth_sigmas is not None:
-            raise ValueError(
-                "Set only one of smooth_sigma_px, masked_fill_sigmas, or "
-                "adaptive_smooth_sigmas."
-            )
         from scipy.ndimage import gaussian_filter
 
         sigma = gaussian_filter(sigma, sigma=float(smooth_sigma_px), mode="nearest")
-    elif masked_fill_sigmas is not None:
-        if len(masked_fill_sigmas) != 2:
-            raise ValueError(
-                "masked_fill_sigmas must be (sigma_sharp_px, sigma_fill_px)."
-            )
-        spx, sfx = masked_fill_sigmas
-        sigma = masked_fill_mass_map(
-            sigma,
-            sigma_fill_px=sfx,
-            sigma_sharp_px=spx,
-            weight_sigma_px=masked_fill_weight_sigma_px,
-            percentiles=masked_fill_percentiles,
-            mask_power=masked_fill_mask_power,
-            blend_mode=masked_fill_blend_mode,
-            dense_threshold=masked_fill_dense_threshold,
-        )
-    elif adaptive_smooth_sigmas is not None:
-        if len(adaptive_smooth_sigmas) != 2:
-            raise ValueError(
-                "adaptive_smooth_sigmas must be (sigma_sharp_px, sigma_smooth_px)."
-            )
-        spx, smx = adaptive_smooth_sigmas
-        sigma = adaptive_gaussian_blend_mass_map(
-            sigma,
-            sigma_sharp_px=spx,
-            sigma_smooth_px=smx,
-            weight_sigma_px=adaptive_weight_sigma_px,
-            percentiles=adaptive_percentiles,
-        )
 
     return sigma, (-1.0, 1.0, -1.0, 1.0)
 
