@@ -21,6 +21,7 @@ from scripts.render_flythrough_movie import (
     frame_array_path,
     list_snaps,
     load_frame_array,
+    resolve_color_lock_frame,
     save_frame_array,
     ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM,
     ZOOM_OBSERVE_ZOOM_END_FRACTION,
@@ -194,6 +195,15 @@ def test_zoom_observe_snap_indices_advance_faster_during_zoom():
     assert zoom_rate < detail_rate
     assert zoom_rate <= ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM + 0.5
     assert detail_rate >= 2.0 - 0.5
+
+
+def test_resolve_color_lock_frame_zoom_observe():
+    n_frames = 1202
+    cmz = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames))
+    assert resolve_color_lock_frame("zoom-observe", n_frames, 0, 1202) == cmz
+    assert resolve_color_lock_frame("zoom-observe", n_frames, 0, 300) == cmz
+    assert resolve_color_lock_frame("zoom-observe", n_frames, 720, 1202) == 720
+    assert resolve_color_lock_frame("orbit", n_frames, 100, 200) == 100
 
 
 def test_build_camera_path_orbit_has_no_ups():

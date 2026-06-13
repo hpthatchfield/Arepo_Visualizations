@@ -173,6 +173,41 @@ def test_project_column_density_camera_sums_along_depth():
     assert float(col.sum()) == pytest.approx(3.0)
 
 
+def test_project_column_density_camera_masked_fill_smooths_sparse_regions():
+    rng = np.random.default_rng(6)
+    n = 800
+    x = rng.uniform(-4.0, 4.0, n)
+    y = rng.uniform(-4.0, 4.0, n)
+    z = rng.uniform(2.0, 18.0, n)
+    rho = rng.uniform(1e-4, 2e-3, n)
+    rho[350:450] += rng.uniform(1.0, 5.0, 100)
+    cam = np.array([7.0, 3.0, -12.0])
+
+    raw, _ = project_column_density_camera(
+        x, y, z, rho, camera_position=cam, nx=64, ny=64, nz=12, z_far=100.0,
+    )
+    filled, _ = project_column_density_camera(
+        x,
+        y,
+        z,
+        rho,
+        camera_position=cam,
+        nx=64,
+        ny=64,
+        nz=12,
+        z_far=100.0,
+        masked_fill_sigmas=(0.5, 6.0),
+        masked_fill_weight_sigma_px=1.0,
+        masked_fill_percentiles=(15.0, 80.0),
+        masked_fill_blend_mode="detail",
+        masked_fill_dense_threshold=0.35,
+    )
+    assert raw.shape == filled.shape == (64, 64)
+    low = raw < np.percentile(raw[raw > 0], 40)
+    assert np.std(filled[low]) < np.std(raw[low])
+    assert filled.max() >= 0.9 * raw.max()
+
+
 def test_project_surface_density_camera_density_vs_mass_weights():
     rng = np.random.default_rng(5)
     n = 500

@@ -56,6 +56,11 @@ MASKED_FILL_DENSE_THRESHOLD = 0.35
 PROJECTION_METHOD = "column"
 COLUMN_DEPTH_BINS = 48
 COLUMN_SMOOTH_SIGMA_PX = 0.5
+COLUMN_MASKED_FILL_SIGMAS = (COLUMN_SMOOTH_SIGMA_PX, 6.0)
+COLUMN_MASKED_FILL_WEIGHT_SIGMA_PX = 1.0
+COLUMN_MASKED_FILL_PERCENTILES = (15.0, 80.0)
+COLUMN_MASKED_FILL_BLEND_MODE = "detail"
+COLUMN_MASKED_FILL_DENSE_THRESHOLD = 0.35
 CODE_TIME_TO_MYR = 98.7
 
 PROJECTION_METHODS = ("surface", "column")
@@ -268,6 +273,48 @@ def build_snap_indices(n_frames, n_snaps, path, frames_per_snap=2):
     return indices
 
 
+def resolve_color_lock_frame(path, n_frames, frame_start, frame_end):
+    """Pick which frame sets the locked log color scale for this render batch."""
+    if path == "zoom-observe":
+        ideal = max(0, min(n_frames - 1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames))))
+    else:
+        ideal = frame_start
+    if ideal < frame_start:
+        return frame_start
+    if ideal >= frame_end:
+        return frame_end - 1
+    return ideal
+
+
+def project_frame_at_index(
+    frame_index,
+    snap_indices,
+    snap_paths,
+    cameras,
+    ups,
+    *,
+    projection_weight,
+    projection_method,
+    smooth_blend,
+    snap_prefix=SNAP_PREFIX,
+):
+    """Load the snap and projection for one frame index."""
+    sidx = int(snap_indices[frame_index])
+    snap_path = snap_paths[sidx]
+    x, y, z, weights, header = load_gas_bar(
+        snap_path, projection_weight=projection_weight
+    )
+    cam = cameras[frame_index]
+    up = (0.0, 0.0, 1.0) if ups is None else ups[frame_index]
+    sigma = project_flythrough_map(
+        x, y, z, weights, cam, up=up,
+        projection_method=projection_method,
+        smooth_blend=smooth_blend,
+    )
+    snap_n = snap_num_from_name(snap_path, prefix=snap_prefix)
+    return sigma, snap_n, header
+
+
 def max_snap_index_used(snap_indices, frame_end):
     """Highest snapshot index referenced through ``frame_end - 1``."""
     if frame_end <= 0:
@@ -316,6 +363,15 @@ def project_flythrough_map(
 ):
     """Dispatch to surface splat (legacy) or column histogram integration."""
     if projection_method == "column":
+        smooth_kw = {}
+        if smooth:
+            smooth_kw = dict(
+                masked_fill_sigmas=COLUMN_MASKED_FILL_SIGMAS,
+                masked_fill_weight_sigma_px=COLUMN_MASKED_FILL_WEIGHT_SIGMA_PX,
+                masked_fill_percentiles=COLUMN_MASKED_FILL_PERCENTILES,
+                masked_fill_blend_mode=COLUMN_MASKED_FILL_BLEND_MODE,
+                masked_fill_dense_threshold=COLUMN_MASKED_FILL_DENSE_THRESHOLD,
+            )
         sigma, _ = project_column_density_camera(
             x,
             y,
@@ -330,7 +386,7 @@ def project_flythrough_map(
             nz=COLUMN_DEPTH_BINS,
             z_near=Z_NEAR,
             z_far=Z_FAR,
-            smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
+            **smooth_kw,
         )
         return sigma
     if projection_method == "surface":
@@ -488,8 +544,16 @@ def build_parser():
         "--lock-color-scale",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="autoscale vmin/vmax from the first rendered frame, then hold fixed "
-        "(on by default); pass --no-lock-color-scale to use the fixed --vmin/--vmax",
+        help="autoscale vmin/vmax from a reference frame, then hold fixed (on by "
+        "default); zoom-observe uses the CMZ zoom-arrival frame; pass "
+        "--no-lock-color-scale to use the fixed --vmin/--vmax",
+    )
+    parser.add_argument(
+        "--color-lock-frame",
+        type=int,
+        default=None,
+        help="frame index for color-scale lock (default: first frame, or CMZ "
+        "zoom-arrival frame for zoom-observe)",
     )
     parser.add_argument(
         "--progress-every",
@@ -606,14 +670,58 @@ def main():
     if args.skip_png:
         _log("PNG output disabled (--skip-png)")
     _log(f"output -> {args.output_dir.resolve()}")
+
+    vmin = args.vmin
+    vmax = args.vmax
+    if args.lock_color_scale:
+        if args.color_lock_frame is not None:
+            if not (args.frame_start <= args.color_lock_frame < frame_end):
+                _log(
+                    f"warning: --color-lock-frame {args.color_lock_frame} outside "
+                    f"render range [{args.frame_start}, {frame_end}); clamping"
+                )
+            lock_frame = max(
+                args.frame_start, min(args.color_lock_frame, frame_end - 1)
+            )
+        else:
+            lock_frame = resolve_color_lock_frame(
+                args.path, args.n_frames, args.frame_start, frame_end
+            )
+        cmz_frame = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * args.n_frames))
+        _log(f"precomputing color scale from frame {lock_frame}...")
+        sigma_ref, snap_n_lock, _ = project_frame_at_index(
+            lock_frame,
+            snap_indices,
+            snap_paths,
+            cameras,
+            ups,
+            projection_weight=args.projection_weight,
+            projection_method=args.projection_method,
+            smooth_blend=args.smooth_blend,
+            snap_prefix=args.snap_prefix,
+        )
+        vmin, vmax = color_limits(sigma_ref)
+        if args.path == "zoom-observe" and lock_frame == cmz_frame:
+            _log(
+                f"locked color scale at CMZ zoom arrival: frame {lock_frame}  "
+                f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}"
+            )
+        else:
+            _log(
+                f"locked color scale from frame {lock_frame}  snap {snap_n_lock}  "
+                f"vmin={vmin:.4g}  vmax={vmax:.4g}"
+            )
+            if args.path == "zoom-observe" and cmz_frame < args.frame_start:
+                _log(
+                    f"  (CMZ arrival is frame {cmz_frame}, before this batch; "
+                    "pass --vmin/--vmax from an earlier batch for consistency)"
+                )
+
     _log("starting render loop...")
 
     cached = None
     x = y = z = weights = None
     header = None
-    vmin = args.vmin
-    vmax = args.vmax
-    scale_locked = False
     t0 = time.time()
 
     for i in range(args.frame_start, frame_end):
@@ -639,10 +747,6 @@ def main():
             projection_method=args.projection_method,
             smooth_blend=args.smooth_blend,
         )
-        if args.lock_color_scale and not scale_locked:
-            vmin, vmax = color_limits(sigma)
-            scale_locked = True
-            _log(f"locked color scale from frame {i}: vmin={vmin:.4g}  vmax={vmax:.4g}")
 
         if args.save_arrays:
             array_path = frame_array_path(args.output_dir, i)
