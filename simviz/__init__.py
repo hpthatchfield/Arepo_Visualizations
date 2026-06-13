@@ -21,7 +21,17 @@ from .field_plots import (
     project_column_density_xy,
     rgba_intensity_with_lic_striations,
 )
-from .projections import camera_frame, rotate_about_axis, rotate_to_bar_frame, rotate_xy, world_to_camera, xyz_to_lbr
+from .projections import (
+    GALACTIC_ORIGIN,
+    MOCK_SUN_VIEW_BAR_OFFSET_DEG,
+    camera_frame,
+    mock_sun_view_az_el_deg,
+    rotate_about_axis,
+    rotate_to_bar_frame,
+    rotate_xy,
+    world_to_camera,
+    xyz_to_lbr,
+)
 from .utils import (
     CONSTANTS,
     build_sink_data_sinkwise,
@@ -83,6 +93,9 @@ __all__ = [
     "mask_box",
     "mask_cylinder",
     "mask_galactic_window",
+    "GALACTIC_ORIGIN",
+    "MOCK_SUN_VIEW_BAR_OFFSET_DEG",
+    "mock_sun_view_az_el_deg",
     "plot_planck_style_bfield",
     "plot_surface_density_map",
     "plot_threepanel_bfield",

@@ -56,10 +56,7 @@ def test_color_limits_percentiles():
     sigma = np.logspace(-2, 2, 1000)
     vmin, vmax = color_limits(sigma)
     assert vmin > 0 and vmax > vmin
-    assert vmin >= max(
-        np.percentile(sigma, movie.COLOR_VMIN_PERCENTILE),
-        movie.VMIN_FLOOR,
-    )
+    assert vmin >= np.percentile(sigma, movie.COLOR_VMIN_PERCENTILE) - 1e-12
     assert vmax >= np.percentile(sigma, movie.COLOR_VMAX_PERCENTILE - 1)
 
 
@@ -168,14 +165,48 @@ def test_edge_orbit_path_endpoints():
     assert pts[mid][2] > 3.0                      # ~30 deg orbit mid-point
 
 
+def test_mock_sun_view_az_el_deg():
+    from simviz.projections import (
+        GALACTIC_ORIGIN,
+        MOCK_SUN_VIEW_BAR_OFFSET_DEG,
+        mock_sun_view_az_el_deg,
+    )
+
+    az, el = mock_sun_view_az_el_deg()
+    assert MOCK_SUN_VIEW_BAR_OFFSET_DEG == 30.0
+    assert np.isclose(el, 0.0, atol=1e-9)
+    assert GALACTIC_ORIGIN["xsun"] < 0.0
+    # GC→Sun axis in the disk plane, rotated +30° CCW: (-cos30, -sin30, 0).
+    assert az < -90.0 or az > 90.0  # third/fourth quadrant (sun side)
+    r = 9.0
+    x = r * np.cos(np.radians(el)) * np.cos(np.radians(az))
+    y = r * np.cos(np.radians(el)) * np.sin(np.radians(az))
+    assert x < 0.0 and y < 0.0
+
+
+def test_opening_camera_radius():
+    r = movie.opening_camera_radius(disk_half_width_code=250.0)
+    assert r > 400.0
+    assert movie.column_z_far_for_camera((r, 0.0, r * 0.996)) > r
+
+
 def test_zoom_observe_path_endpoints():
+    from simviz.projections import mock_sun_view_az_el_deg
+
     pts, _ = build_camera_path("zoom-observe", 240)
+    sun_az, sun_el = mock_sun_view_az_el_deg()
     r0 = np.linalg.norm(pts[0])
+    r_open = movie.opening_camera_radius()
     r_end = np.linalg.norm(pts[-1])
-    assert np.isclose(r0, 32.0, atol=0.5)          # starts farther out
-    assert r0 > r_end + 5.0                         # ends much closer than start
-    assert pts[0][2] > 5.0                          # starts well above the plane
-    assert np.isclose(pts[-1][2], 0.0, atol=0.05)   # ends edge-on
+    end_az = np.degrees(np.arctan2(pts[-1][1], pts[-1][0]))
+    end_el = np.degrees(np.arcsin(np.clip(pts[-1][2] / r_end, -1.0, 1.0)))
+    start_el = np.degrees(np.arcsin(np.clip(pts[0][2] / r0, -1.0, 1.0)))
+    assert np.isclose(r0, r_open, rtol=0.02)
+    assert start_el > 80.0
+    assert r0 > r_end + 5.0
+    assert np.isclose(end_az, sun_az, atol=0.5)     # ends on mock solar l-b axis
+    assert np.isclose(end_el, sun_el, atol=0.5)
+    assert pts[-1][0] < 0.0                         # sun side of GC (xsun < 0)
     assert not np.allclose(pts[0], pts[-1], atol=1.0)  # does not loop back
     zoom_frame = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * 240))
     r_zoom = np.linalg.norm(pts[zoom_frame])
@@ -221,11 +252,13 @@ def test_save_and_load_frame_array(tmp_path):
         snap_number=880,
         time_myr=12.3,
         frame_index=7,
+        column_depth_code=42.5,
     )
     loaded = load_frame_array(path)
     assert loaded["frame_index"] == 7
     assert loaded["snap_number"] == 880
     assert loaded["time_myr"] == pytest.approx(12.3)
+    assert loaded["column_depth_code"] == pytest.approx(42.5)
     assert loaded["sigma"].shape == (4, 4)
     assert np.allclose(loaded["sigma"], sigma, rtol=1e-5)
 

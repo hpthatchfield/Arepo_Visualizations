@@ -12,6 +12,33 @@ GALACTIC_ORIGIN = {
     "vzsun": 0.0,
 }
 
+# In-plane rotation applied to the GC→Sun line for mock CMZ / l–b flythrough endings
+# (same 30° scale as ``edge-orbit`` orbit elevation in ``render_flythrough_movie``).
+MOCK_SUN_VIEW_BAR_OFFSET_DEG = 30.0
+
+
+def mock_sun_view_az_el_deg(bar_offset_deg=MOCK_SUN_VIEW_BAR_OFFSET_DEG):
+    """Return ``(azimuth_deg, elevation_deg)`` for a mock solar CMZ view in bar frame.
+
+    The camera sits on the GC→Sun axis (``GALACTIC_ORIGIN``) looking at the origin,
+    with an optional in-plane rotation ``bar_offset_deg`` — the same offset scale used
+    for mock observational maps (``DEFAULT_LBV_GRID`` / ``project_bfield_lb``).
+    """
+    xsun = GALACTIC_ORIGIN["xsun"]
+    ysun = GALACTIC_ORIGIN["ysun"]
+    zsun = GALACTIC_ORIGIN["zsun"]
+    norm = np.sqrt(xsun**2 + ysun**2 + zsun**2)
+    if norm == 0.0:
+        raise ValueError("Sun position coincides with GC.")
+    dx, dy, dz = xsun / norm, ysun / norm, zsun / norm
+    phi = np.radians(bar_offset_deg)
+    rx = dx * np.cos(phi) - dy * np.sin(phi)
+    ry = dx * np.sin(phi) + dy * np.cos(phi)
+    rz = dz
+    az = np.degrees(np.arctan2(ry, rx))
+    el = np.degrees(np.arcsin(np.clip(rz, -1.0, 1.0)))
+    return float(az), float(el)
+
 
 def rotate_xy(x, y, theta):
     """Rotate x and y coordinates by an angle.

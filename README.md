@@ -37,7 +37,7 @@ Renders a PNG sequence from gas snapshots using a perspective surface-density pr
 | `orbit` (default) | Tilted circular orbit with radial drift |
 | `cinematic` | Keyframed zoom-in, orbit from above, dip to edge-on, exit below disk |
 | `edge-orbit` | Edge-on (mock from-the-sun view) → 30° above plane → one orbit → back to edge-on |
-| `zoom-observe` | Far-out galaxy view → zoom to CMZ → partial orbit → edge-on observational end |
+| `zoom-observe` | Far-out galaxy view → zoom to CMZ → partial orbit → mock solar l–b end |
 
 Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). Projections default to **density-weighted column integration** (`--projection-method column`, same weighting idea as ``project_column_density_xy``); use `--projection-method surface` for the legacy 2D splat + masked_fill path.
 

@@ -25,19 +25,21 @@ from scripts.render_flythrough_movie import (
     COLUMN_DEPOSIT,
     COLUMN_SMOOTH_SIGMA_PX,
     DEFAULT_CMAP,
+    DISK_HALF_WIDTH_CODE,
     MASKED_FILL_BLEND_MODE,
     PATH_KEYFRAMES,
     PROJECTION_METHOD,
     PROJECTION_METHODS,
     PROJECTION_WEIGHT_FIELDS,
-    SIGMA_CODE_TO_N_MOL_CM2,
     SIGMA_COLORBAR_LABEL,
     SNAP_PREFIX,
     VMAX,
     VMIN,
     build_camera_path,
     color_limits,
+    column_depth_for_camera,
     load_gas_bar,
+    n_mol_scale_for_depth,
     project_flythrough_map,
     snap_num_from_name,
     write_png,
@@ -76,10 +78,11 @@ def describe_map(sigma, label):
         print("  no positive pixels")
 
 
-def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, vmax):
+def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, vmax, column_depth_code):
     """Side-by-side nearest vs production column deposit at one color scale."""
-    disp_vmin = vmin * SIGMA_CODE_TO_N_MOL_CM2
-    disp_vmax = vmax * SIGMA_CODE_TO_N_MOL_CM2
+    n_mol_scale = n_mol_scale_for_depth(column_depth_code)
+    disp_vmin = vmin * n_mol_scale
+    disp_vmax = vmax * n_mol_scale
     prod_label = (
         f"production ({COLUMN_DEPOSIT} + "
         f"σ={COLUMN_SMOOTH_SIGMA_PX:g}px blur)"
@@ -94,7 +97,7 @@ def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, 
         out[~np.isfinite(out)] = vmin
         out[out <= 0] = vmin
         last_im = ax.imshow(
-            out * SIGMA_CODE_TO_N_MOL_CM2,
+            out * n_mol_scale,
             origin="lower",
             extent=(-1, 1, -1, 1),
             norm=colors.LogNorm(vmin=disp_vmin, vmax=disp_vmax),
@@ -201,6 +204,12 @@ def build_parser():
         help="masked_fill blend for --projection-method surface only",
     )
     parser.add_argument(
+        "--disk-half-width",
+        type=float,
+        default=None,
+        help="override DISK_HALF_WIDTH_CODE for zoom-observe opening radius (code units)",
+    )
+    parser.add_argument(
         "--projection-method",
         choices=PROJECTION_METHODS,
         default=PROJECTION_METHOD,
@@ -241,7 +250,11 @@ def main():
     print(f"  projection_method = {args.projection_method}")
 
     if args.path in PATH_KEYFRAMES:
-        path, ups = build_camera_path(args.path, args.n_frames)
+        path, ups = build_camera_path(
+            args.path,
+            args.n_frames,
+            disk_half_width_code=args.disk_half_width,
+        )
     else:
         path, ups = build_camera_path(
             args.path,
@@ -254,6 +267,13 @@ def main():
     idx = args.frame_index % args.n_frames
     cam = path[idx]
     up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
+    col_depth = column_depth_for_camera(cam)
+    cam_r = float(np.linalg.norm(cam))
+    end_el = np.degrees(np.arcsin(np.clip(cam[2] / cam_r, -1.0, 1.0)))
+    print(
+        f"  camera r={cam_r:.1f}  elevation={end_el:.1f}°  "
+        f"column_depth={col_depth:.1f}  disk_half_width={args.disk_half_width or DISK_HALF_WIDTH_CODE}"
+    )
 
     if args.compare_deposit:
         if args.projection_method != "column":
@@ -288,7 +308,7 @@ def main():
                 tag=args.tag or "deposit_compare",
             )
         _write_deposit_compare_png(
-            sigma_nearest, sigma_production, cmp_path, vmin, vmax,
+            sigma_nearest, sigma_production, cmp_path, vmin, vmax, col_depth,
         )
         print(f"wrote {cmp_path}")
         return
@@ -318,8 +338,15 @@ def main():
 
     snap_n = snap_num_from_name(snap_path, prefix=args.snap_prefix)
     title = f"snap {snap_n}  frame {args.frame_index}  cam=({cam[0]:.2f},{cam[1]:.2f},{cam[2]:.2f})"
-    write_png(sigma, out_path, vmin, vmax, title=title,
-              time_myr=float(header["Time"]) * CODE_TIME_TO_MYR)
+    write_png(
+        sigma,
+        out_path,
+        vmin,
+        vmax,
+        title=title,
+        time_myr=float(header["Time"]) * CODE_TIME_TO_MYR,
+        column_depth_code=col_depth,
+    )
     print(f"wrote {out_path}")
 
     if args.debug and not args.no_smooth:

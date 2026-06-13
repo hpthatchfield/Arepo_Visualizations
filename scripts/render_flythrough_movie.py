@@ -38,10 +38,9 @@ from simviz.field_plots import (
     project_surface_density_camera,
 )
 from simviz.colormaps import resolve_cmap
-from simviz.projections import rotate_about_axis, rotate_to_bar_frame
+from simviz.projections import rotate_about_axis, rotate_to_bar_frame, mock_sun_view_az_el_deg
 from simviz.utils import (
     code_density_sum_to_n_mol_cm2,
-    n_mol_cm2_to_code_density_sum,
     read_snapshot_hdf5,
 )
 
@@ -64,17 +63,50 @@ COLUMN_DEPTH_BINS = 48
 COLUMN_DEPOSIT = "linear_xy"
 COLUMN_SMOOTH_SIGMA_PX = 0.35
 COLUMN_DEPTH_CODE = Z_FAR - Z_NEAR
-# Log-scale display floor in cm⁻² (~10 M☉ pc⁻² under default sightline depth).
-SIGMA_DISPLAY_FLOOR_N_MOL_CM2 = 5.4e20
-VMIN_FLOOR = n_mol_cm2_to_code_density_sum(
-    SIGMA_DISPLAY_FLOOR_N_MOL_CM2, COLUMN_DEPTH_CODE
-)
-VMIN = VMIN_FLOOR
+# Default N_mol scale for close CMZ views (adaptive per-frame depth overrides at display time).
 SIGMA_CODE_TO_N_MOL_CM2 = float(
     code_density_sum_to_n_mol_cm2(1.0, COLUMN_DEPTH_CODE)
 )
 SIGMA_COLORBAR_LABEL = r"$N_\mathrm{mol}$ [cm$^{-2}$]"
+VMIN = 1e-30
 CODE_TIME_TO_MYR = 98.7
+
+# Opening ``zoom-observe`` shot: nearly face-on, far enough to frame most of the disk.
+# Half-width on the midplane in code units (100 pc); tune to match whole-galaxy XY maps.
+DISK_HALF_WIDTH_CODE = 250.0
+OPENING_ELEVATION_DEG = 85.0
+Z_FAR_MARGIN_CODE = 8.0
+
+
+def opening_camera_radius(
+    disk_half_width_code=DISK_HALF_WIDTH_CODE,
+    fov_x_deg=FOV_X_DEG,
+    elevation_deg=OPENING_ELEVATION_DEG,
+):
+    """Camera distance so ``disk_half_width_code`` fits in the horizontal FOV at the GC."""
+    tan_half = np.tan(np.radians(fov_x_deg / 2.0))
+    sin_el = np.sin(np.radians(elevation_deg))
+    return float(disk_half_width_code / max(sin_el * tan_half, 1e-6))
+
+
+def column_z_far_for_camera(
+    camera_position,
+    *,
+    z_far_floor=Z_FAR,
+    margin=Z_FAR_MARGIN_CODE,
+):
+    """Upper depth limit that always includes the GC for the current camera distance."""
+    dist = float(np.linalg.norm(np.asarray(camera_position, dtype=np.float64)))
+    return max(z_far_floor, dist + margin)
+
+
+def column_depth_for_camera(camera_position, z_near=Z_NEAR, **z_far_kwargs):
+    """Integrated sightline depth (code units) for column projection and N_mol conversion."""
+    return column_z_far_for_camera(camera_position, **z_far_kwargs) - z_near
+
+
+def n_mol_scale_for_depth(column_depth_code):
+    return float(code_density_sum_to_n_mol_cm2(1.0, column_depth_code))
 
 PROJECTION_METHODS = ("surface", "column")
 ARRAYS_SUBDIR = "arrays"
@@ -167,16 +199,26 @@ DEFAULT_EDGE_ORBIT_KEYFRAMES = (
     (1.00, 12.0, 360.0, 0.0),    # dip back to edge-on (closes the loop)
 )
 
-# Far-out galaxy view -> zoom to CMZ -> partial orbit -> dip to edge-on and hold.
+def build_zoom_observe_keyframes(disk_half_width_code=None):
+    """Keyframed ``zoom-observe`` path; optional disk half-width override for previews."""
+    r_open = opening_camera_radius(
+        disk_half_width_code or DISK_HALF_WIDTH_CODE
+    )
+    sun_az, sun_el = mock_sun_view_az_el_deg()
+    return (
+        (0.00, r_open, 0.0, OPENING_ELEVATION_DEG),
+        (0.14, 110.0, 0.0, 52.0),
+        (0.22, 9.0, 0.0, 35.0),
+        (0.60, 8.0, 55.0, 35.0),
+        (0.85, 9.0, 70.0, 8.0),
+        (1.00, 9.0, sun_az, sun_el),
+    )
+
+
+# Nearly face-on whole disk -> float down -> zoom to CMZ -> partial orbit -> mock solar view.
 # Zoom completes at fraction 0.22 (fast camera + fast snap advance); orbit/GC phase
 # from 0.22 onward uses --frames-per-snap for detailed evolution.
-DEFAULT_ZOOM_OBSERVE_KEYFRAMES = (
-    (0.00, 32.0, 0.0, 50.0),     # far out — more outer disk in view
-    (0.22, 9.0, 0.0, 35.0),      # quick zoom to the center (was 0.40 / r=22)
-    (0.60, 8.0, 55.0, 35.0),     # partial rotation (~55 deg)
-    (0.85, 9.0, 70.0, 8.0),      # dip toward the midplane
-    (1.00, 9.0, 70.0, 0.0),      # end edge-on (mock observational view)
-)
+DEFAULT_ZOOM_OBSERVE_KEYFRAMES = build_zoom_observe_keyframes()
 ZOOM_OBSERVE_ZOOM_END_FRACTION = 0.22
 ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM = 8
 
@@ -242,8 +284,20 @@ def cinematic_camera_path(n_frames, keyframes=DEFAULT_CINEMATIC_KEYFRAMES):
     return pts, ups
 
 
-def build_camera_path(path, n_frames, r_start=12.0, r_end=6.0, n_turns=1.5, tilt_deg=35.0):
+def build_camera_path(
+    path,
+    n_frames,
+    r_start=12.0,
+    r_end=6.0,
+    n_turns=1.5,
+    tilt_deg=35.0,
+    *,
+    disk_half_width_code=None,
+):
     """Return ``(positions, ups)`` for a named camera path. ``ups`` is None for orbit."""
+    if path == "zoom-observe" and disk_half_width_code is not None:
+        keyframes = build_zoom_observe_keyframes(disk_half_width_code)
+        return cinematic_camera_path(n_frames, keyframes=keyframes)
     if path in PATH_KEYFRAMES:
         return cinematic_camera_path(n_frames, keyframes=PATH_KEYFRAMES[path])
     return camera_path(
@@ -340,6 +394,7 @@ def project_surface_map(
     x, y, z, weights, cam, smooth=True, up=(0.0, 0.0, 1.0),
     smooth_blend=MASKED_FILL_BLEND_MODE,
 ):
+    z_far = column_z_far_for_camera(cam)
     sigma, _ = project_surface_density_camera(
         x,
         y,
@@ -352,7 +407,7 @@ def project_surface_map(
         nx=NX,
         ny=NY,
         z_near=Z_NEAR,
-        z_far=Z_FAR,
+        z_far=z_far,
         masked_fill_sigmas=MASKED_FILL_SIGMAS if smooth else None,
         masked_fill_weight_sigma_px=MASKED_FILL_WEIGHT_SIGMA_PX,
         masked_fill_percentiles=MASKED_FILL_PERCENTILES,
@@ -375,6 +430,7 @@ def project_flythrough_map(
     smooth_blend=MASKED_FILL_BLEND_MODE,
 ):
     """Dispatch to surface splat (legacy) or column histogram integration."""
+    z_far = column_z_far_for_camera(cam)
     if projection_method == "column":
         sigma, _ = project_column_density_camera(
             x,
@@ -389,7 +445,7 @@ def project_flythrough_map(
             ny=NY,
             nz=COLUMN_DEPTH_BINS,
             z_near=Z_NEAR,
-            z_far=Z_FAR,
+            z_far=z_far,
             smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
             deposit=COLUMN_DEPOSIT if smooth else "nearest",
         )
@@ -406,7 +462,7 @@ project_mass_map = project_flythrough_map
 
 def color_limits(
     sigma,
-    vmin_floor=VMIN_FLOOR,
+    vmin_floor=0.0,
     vmin_percentile=COLOR_VMIN_PERCENTILE,
     vmax_percentile=COLOR_VMAX_PERCENTILE,
 ):
@@ -436,7 +492,15 @@ def arrays_dir_for(output_dir):
     return Path(output_dir) / ARRAYS_SUBDIR
 
 
-def save_frame_array(sigma, out_path, *, snap_number, time_myr, frame_index):
+def save_frame_array(
+    sigma,
+    out_path,
+    *,
+    snap_number,
+    time_myr,
+    frame_index,
+    column_depth_code=COLUMN_DEPTH_CODE,
+):
     """Save a raw projection map for fast colormap / scale re-rendering."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -446,16 +510,19 @@ def save_frame_array(sigma, out_path, *, snap_number, time_myr, frame_index):
         snap_number=np.int32(snap_number),
         time_myr=np.float64(time_myr),
         frame_index=np.int32(frame_index),
+        column_depth_code=np.float64(column_depth_code),
     )
 
 
 def load_frame_array(path):
     with np.load(path) as data:
+        column_depth = data["column_depth_code"] if "column_depth_code" in data else COLUMN_DEPTH_CODE
         return {
             "sigma": np.asarray(data["sigma"], dtype=np.float64),
             "snap_number": int(data["snap_number"]),
             "time_myr": float(data["time_myr"]),
             "frame_index": int(data["frame_index"]),
+            "column_depth_code": float(column_depth),
         }
 
 
@@ -469,9 +536,9 @@ def list_frame_arrays(arrays_dir):
     return paths
 
 
-def sigma_code_to_n_mol_cm2(sigma):
+def sigma_code_to_n_mol_cm2(sigma, column_depth_code=COLUMN_DEPTH_CODE):
     """Convert column-histogram sums to μ-weighted particle column density (cm⁻²)."""
-    return code_density_sum_to_n_mol_cm2(sigma, COLUMN_DEPTH_CODE)
+    return code_density_sum_to_n_mol_cm2(sigma, column_depth_code)
 
 
 def write_png(
@@ -484,13 +551,15 @@ def write_png(
     cmap=DEFAULT_CMAP,
     show_colorbar=True,
     colorbar_label=SIGMA_COLORBAR_LABEL,
+    column_depth_code=COLUMN_DEPTH_CODE,
 ):
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
     out[out <= 0] = vmin
-    display = sigma_code_to_n_mol_cm2(out)
-    disp_vmin = vmin * SIGMA_CODE_TO_N_MOL_CM2
-    disp_vmax = vmax * SIGMA_CODE_TO_N_MOL_CM2
+    n_mol_scale = n_mol_scale_for_depth(column_depth_code)
+    display = sigma_code_to_n_mol_cm2(out, column_depth_code)
+    disp_vmin = vmin * n_mol_scale
+    disp_vmax = vmax * n_mol_scale
 
     fig, ax = plt.subplots(1, 1, figsize=(6.2, 6), dpi=150)
     im = ax.imshow(
@@ -547,7 +616,7 @@ def build_parser():
         "(zoom-in / orbit from above / dip to edge-on / exit below), "
         "'edge-orbit' (edge-on -> 30 deg -> one orbit -> edge-on loop), or "
         "'zoom-observe' (far-out galaxy -> zoom to CMZ -> partial orbit -> "
-        "edge-on observational end); keyframed paths ignore "
+        "mock solar l-b end); keyframed paths ignore "
         "--r-start/--r-end/--n-turns/--tilt-deg",
     )
     parser.add_argument("--n-frames", type=int, default=300)
@@ -676,6 +745,12 @@ def main():
     _log(f"frames_per_snap={args.frames_per_snap}  progress_every={args.progress_every}")
     if args.path == "zoom-observe":
         zoom_frames = max(1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * args.n_frames)))
+        r_open = DEFAULT_ZOOM_OBSERVE_KEYFRAMES[0][1]
+        _log(
+            f"zoom-observe opening: r={r_open:.0f} code units, "
+            f"el={OPENING_ELEVATION_DEG:.0f}° "
+            f"(disk half-width target {DISK_HALF_WIDTH_CODE:.0f})"
+        )
         _log(
             f"zoom-observe pacing: frames 0..{zoom_frames - 1} use "
             f"frames_per_snap={ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM}, "
@@ -762,6 +837,7 @@ def main():
 
         cam = cameras[i]
         up = (0.0, 0.0, 1.0) if ups is None else ups[i]
+        col_depth = column_depth_for_camera(cam)
         sigma = project_flythrough_map(
             x, y, z, weights, cam, up=up,
             projection_method=args.projection_method,
@@ -776,6 +852,7 @@ def main():
                 snap_number=snap_n,
                 time_myr=float(header["Time"]) * CODE_TIME_TO_MYR,
                 frame_index=i,
+                column_depth_code=col_depth,
             )
 
         if not args.skip_png:
@@ -788,6 +865,7 @@ def main():
                 vmax,
                 title=title,
                 time_myr=float(header["Time"]) * CODE_TIME_TO_MYR,
+                column_depth_code=col_depth,
             )
 
         done = i - args.frame_start + 1
