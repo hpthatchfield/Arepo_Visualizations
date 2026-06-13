@@ -22,12 +22,16 @@ sys.path.insert(0, str(_PKG_ROOT))
 
 from scripts.render_flythrough_movie import (
     CODE_TIME_TO_MYR,
+    COLUMN_DEPOSIT,
+    COLUMN_SMOOTH_SIGMA_PX,
     DEFAULT_CMAP,
     MASKED_FILL_BLEND_MODE,
     PATH_KEYFRAMES,
     PROJECTION_METHOD,
     PROJECTION_METHODS,
     PROJECTION_WEIGHT_FIELDS,
+    SIGMA_CODE_TO_MSUN_PC2,
+    SIGMA_COLORBAR_LABEL,
     SNAP_PREFIX,
     VMAX,
     VMIN,
@@ -70,6 +74,41 @@ def describe_map(sigma, label):
         )
     else:
         print("  no positive pixels")
+
+
+def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, vmax):
+    """Side-by-side nearest vs production column deposit at one color scale."""
+    disp_vmin = vmin * SIGMA_CODE_TO_MSUN_PC2
+    disp_vmax = vmax * SIGMA_CODE_TO_MSUN_PC2
+    prod_label = (
+        f"production ({COLUMN_DEPOSIT} + "
+        f"σ={COLUMN_SMOOTH_SIGMA_PX:g}px blur)"
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6), dpi=150)
+    last_im = None
+    for ax, data, label in (
+        (axes[0], sigma_nearest, "nearest (no splat, no blur)"),
+        (axes[1], sigma_production, prod_label),
+    ):
+        out = np.asarray(data, dtype=np.float64).copy()
+        out[~np.isfinite(out)] = vmin
+        out[out <= 0] = vmin
+        last_im = ax.imshow(
+            out * SIGMA_CODE_TO_MSUN_PC2,
+            origin="lower",
+            extent=(-1, 1, -1, 1),
+            norm=colors.LogNorm(vmin=disp_vmin, vmax=disp_vmax),
+            cmap=resolve_cmap(DEFAULT_CMAP),
+            interpolation="nearest",
+        )
+        ax.set_title(label, fontsize=11)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.colorbar(last_im, ax=axes, fraction=0.025, pad=0.02, label=SIGMA_COLORBAR_LABEL)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
 
 
 def _write_compare_png(sigma_raw, sigma_smoothed, out_path, vmin, vmax):
@@ -137,6 +176,12 @@ def build_parser():
         "--no-smooth",
         action="store_true",
         help="render the raw histogram (skip masked_fill) to isolate the smoothing stage",
+    )
+    parser.add_argument(
+        "--compare-deposit",
+        action="store_true",
+        help="write a side-by-side PNG: nearest (no splat/blur) vs production "
+        "column deposit, then exit",
     )
     parser.add_argument(
         "--debug",
@@ -209,6 +254,44 @@ def main():
     idx = args.frame_index % args.n_frames
     cam = path[idx]
     up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
+
+    if args.compare_deposit:
+        if args.projection_method != "column":
+            print("ERROR: --compare-deposit requires --projection-method column")
+            sys.exit(1)
+        print("projecting nearest (no splat, no blur)...")
+        sigma_nearest = project_flythrough_map(
+            x, y, z, weights, cam, smooth=False, up=up,
+            projection_method=args.projection_method,
+        )
+        print("projecting production (splat + blur)...")
+        sigma_production = project_flythrough_map(
+            x, y, z, weights, cam, smooth=True, up=up,
+            projection_method=args.projection_method,
+            smooth_blend=args.smooth_blend,
+        )
+        describe_map(sigma_nearest, "nearest")
+        describe_map(sigma_production, "production")
+        if args.auto_scale:
+            vmin, vmax = color_limits(sigma_production)
+            print(f"shared color scale (from production): vmin={vmin:.4g}  vmax={vmax:.4g}")
+        else:
+            vmin = VMIN if args.vmin is None else args.vmin
+            vmax = VMAX if args.vmax is None else args.vmax
+        if args.output is not None:
+            cmp_path = Path(args.output)
+        else:
+            cmp_path = resolve_preview_output(
+                None,
+                path=args.path,
+                frame_index=args.frame_index,
+                tag=args.tag or "deposit_compare",
+            )
+        _write_deposit_compare_png(
+            sigma_nearest, sigma_production, cmp_path, vmin, vmax,
+        )
+        print(f"wrote {cmp_path}")
+        return
 
     print("projecting...")
     sigma = project_flythrough_map(

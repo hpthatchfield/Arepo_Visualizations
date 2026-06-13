@@ -266,3 +266,10 @@ def test_preview_explicit_output_ignores_tag():
         tag="ignored",
     )
     assert path == Path("custom.png")
+
+
+def test_preview_compare_deposit_flag():
+    args = build_preview_parser().parse_args(
+        ["--snap-dir", "/tmp", "--snap-number", "500", "--compare-deposit"]
+    )
+    assert args.compare_deposit is True
