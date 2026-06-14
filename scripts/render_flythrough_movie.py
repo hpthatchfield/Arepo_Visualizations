@@ -51,7 +51,7 @@ SNAP_PREFIX = "phoenix_stinks_1Msun"
 FOV_X_DEG = 55.0
 NX, NY = 700, 700
 Z_NEAR, Z_FAR = 0.2, 30.0
-VMAX = 2e1
+VMAX = 2e1  # legacy code-unit default (unused; see VMAX_MSUN_PC2)
 COLOR_VMIN_PERCENTILE = 20.0
 COLOR_VMAX_PERCENTILE = 99.0
 MASKED_FILL_SIGMAS = (0.0, 12.0)
@@ -67,10 +67,12 @@ COLUMN_SMOOTH_SIGMA_PX = 0.35
 COLUMN_DEPTH_CODE = Z_FAR - Z_NEAR
 SIGMA_CODE_TO_MSUN_PC2 = float(code_density_sum_to_msun_pc2(1.0, COLUMN_DEPTH_CODE))
 SIGMA_COLORBAR_LABEL = r"$\Sigma$ [M$_\odot\,\mathrm{pc}^{-2}$]"
-# Log-scale display floor (≈10$^{19}$ cm$^{-2}$ in μ-weighted particle units).
-DISPLAY_FLOOR_N_MOL_CM2 = 1.0e19
+# Log-scale display floor (≈10$^{18}$ cm$^{-2}$ in μ-weighted particle units).
+DISPLAY_FLOOR_N_MOL_CM2 = 1.0e18
 SIGMA_DISPLAY_FLOOR_MSUN_PC2 = float(msun_pc2_from_n_mol_cm2(DISPLAY_FLOOR_N_MOL_CM2))
-VMIN = msun_pc2_to_code_density_sum(SIGMA_DISPLAY_FLOOR_MSUN_PC2, COLUMN_DEPTH_CODE)
+VMIN = SIGMA_DISPLAY_FLOOR_MSUN_PC2
+VMAX_MSUN_PC2 = 1.0e4
+VMAX = VMAX_MSUN_PC2
 CODE_TIME_TO_MYR = 98.7
 
 # Opening ``zoom-observe`` shot: nearly face-on, far enough to frame most of the disk.
@@ -109,11 +111,6 @@ def column_depth_for_camera(camera_position, z_near=Z_NEAR, **z_far_kwargs):
 
 def msun_scale_for_depth(column_depth_code):
     return float(code_density_sum_to_msun_pc2(1.0, column_depth_code))
-
-
-def vmin_floor_code(column_depth_code):
-    """Code-unit vmin floor matching ``SIGMA_DISPLAY_FLOOR_MSUN_PC2`` at this depth."""
-    return float(msun_pc2_to_code_density_sum(SIGMA_DISPLAY_FLOOR_MSUN_PC2, column_depth_code))
 
 
 PROJECTION_METHODS = ("surface", "column")
@@ -470,15 +467,20 @@ project_mass_map = project_flythrough_map
 
 def color_limits(
     sigma,
-    vmin_floor=0.0,
+    column_depth_code,
+    vmin_floor_msun=SIGMA_DISPLAY_FLOOR_MSUN_PC2,
     vmin_percentile=COLOR_VMIN_PERCENTILE,
     vmax_percentile=COLOR_VMAX_PERCENTILE,
+    vmax_fallback_msun=VMAX_MSUN_PC2,
 ):
-    """Log-scale limits from positive pixels (same as preview_flythrough_frame)."""
-    pos = sigma[sigma > 0]
+    """Log-scale limits in M☉ pc⁻² (depth-normalized for column projections)."""
+    display = code_density_sum_to_msun_pc2(
+        np.asarray(sigma, dtype=np.float64), column_depth_code
+    )
+    pos = display[np.isfinite(display) & (display > 0)]
     if pos.size == 0:
-        return VMIN, VMAX
-    vmin = max(float(np.percentile(pos, vmin_percentile)), vmin_floor)
+        return vmin_floor_msun, vmax_fallback_msun
+    vmin = max(float(np.percentile(pos, vmin_percentile)), vmin_floor_msun)
     vmax = float(np.percentile(pos, vmax_percentile))
     if vmax <= vmin:
         vmax = vmin * 10.0
@@ -561,13 +563,13 @@ def write_png(
     colorbar_label=SIGMA_COLORBAR_LABEL,
     column_depth_code=COLUMN_DEPTH_CODE,
 ):
-    out = np.asarray(sigma, dtype=np.float64).copy()
-    out[~np.isfinite(out)] = vmin
-    out[out <= 0] = vmin
-    msun_scale = msun_scale_for_depth(column_depth_code)
-    display = sigma_code_to_msun_pc2(out, column_depth_code)
-    disp_vmin = max(vmin * msun_scale, SIGMA_DISPLAY_FLOOR_MSUN_PC2)
-    disp_vmax = vmax * msun_scale
+    """Write PNG; ``vmin``/``vmax`` are in M☉ pc⁻²."""
+    disp_vmin = max(float(vmin), SIGMA_DISPLAY_FLOOR_MSUN_PC2)
+    disp_vmax = float(vmax)
+    display = sigma_code_to_msun_pc2(
+        np.asarray(sigma, dtype=np.float64), column_depth_code
+    )
+    display[~np.isfinite(display) | (display <= 0)] = disp_vmin
 
     fig, ax = plt.subplots(1, 1, figsize=(6.2, 6), dpi=150)
     im = ax.imshow(
@@ -635,8 +637,8 @@ def build_parser():
     parser.add_argument("--r-end", type=float, default=6.0)
     parser.add_argument("--n-turns", type=float, default=1.5)
     parser.add_argument("--tilt-deg", type=float, default=35.0)
-    parser.add_argument("--vmin", type=float, default=VMIN)
-    parser.add_argument("--vmax", type=float, default=VMAX)
+    parser.add_argument("--vmin", type=float, default=VMIN, help="M☉ pc⁻² floor when not autoscaling")
+    parser.add_argument("--vmax", type=float, default=VMAX_MSUN_PC2, help="M☉ pc⁻² ceiling when not autoscaling")
     parser.add_argument(
         "--lock-color-scale",
         action=argparse.BooleanOptionalAction,
@@ -805,18 +807,17 @@ def main():
         )
         lock_cam = cameras[lock_frame]
         lock_depth = column_depth_for_camera(lock_cam)
-        vmin, vmax = color_limits(
-            sigma_ref, vmin_floor=vmin_floor_code(lock_depth)
-        )
+        vmin, vmax = color_limits(sigma_ref, lock_depth)
         if args.path == "zoom-observe" and lock_frame == cmz_frame:
             _log(
                 f"locked color scale at CMZ zoom arrival: frame {lock_frame}  "
-                f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}"
+                f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}  "
+                f"M☉ pc⁻²"
             )
         else:
             _log(
                 f"locked color scale from frame {lock_frame}  snap {snap_n_lock}  "
-                f"vmin={vmin:.4g}  vmax={vmax:.4g}"
+                f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
             )
             if args.path == "zoom-observe" and cmz_frame < args.frame_start:
                 _log(

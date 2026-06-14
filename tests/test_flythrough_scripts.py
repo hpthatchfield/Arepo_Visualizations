@@ -54,11 +54,27 @@ def test_list_snaps_first_snap_number(tmp_path):
 
 def test_color_limits_percentiles():
     sigma = np.logspace(-2, 2, 1000)
-    floor = movie.vmin_floor_code(movie.COLUMN_DEPTH_CODE)
-    vmin, vmax = color_limits(sigma, vmin_floor=floor)
+    depth = movie.COLUMN_DEPTH_CODE
+    vmin, vmax = color_limits(sigma, depth)
+    display = movie.sigma_code_to_msun_pc2(sigma, depth)
     assert vmin > 0 and vmax > vmin
-    assert vmin >= max(np.percentile(sigma, movie.COLOR_VMIN_PERCENTILE), floor)
-    assert vmax >= np.percentile(sigma, movie.COLOR_VMAX_PERCENTILE - 1)
+    assert vmin >= max(
+        np.percentile(display[display > 0], movie.COLOR_VMIN_PERCENTILE),
+        movie.SIGMA_DISPLAY_FLOOR_MSUN_PC2,
+    )
+    assert vmax >= np.percentile(display[display > 0], movie.COLOR_VMAX_PERCENTILE - 1)
+
+
+def test_color_limits_depth_invariant():
+    """Same map in M☉ pc⁻² should yield similar limits regardless of sightline depth."""
+    sigma = np.logspace(0, 3, 500).reshape(25, 20)
+    shallow = 30.0
+    deep = 480.0
+    scale = deep / shallow
+    vmin_s, vmax_s = color_limits(sigma, shallow)
+    vmin_d, vmax_d = color_limits(sigma * scale, deep)
+    assert vmin_s == pytest.approx(vmin_d, rel=1e-6)
+    assert vmax_s == pytest.approx(vmax_d, rel=1e-6)
 
 
 def test_resolve_cmap_rainforest():
@@ -79,7 +95,7 @@ def test_movie_defaults_to_autoscale_lock():
     args = build_parser().parse_args(["--snap-dir", "/tmp"])
     assert args.lock_color_scale is True
     assert args.vmin == movie.VMIN
-    assert args.vmax == movie.VMAX
+    assert args.vmax == movie.VMAX_MSUN_PC2
     assert args.progress_every == 1
 
 
@@ -119,13 +135,17 @@ def test_movie_defaults_to_density_projection_weight():
     assert args.projection_method == "column"
 
 
-def test_preview_defaults_to_autoscale():
+def test_preview_defaults_to_lock_color_scale():
     args = build_preview_parser().parse_args(["-s", "/tmp/x.hdf5"])
-    assert args.auto_scale is True
+    assert args.lock_color_scale is True
+    assert args.auto_scale is False
 
 
 def test_preview_no_auto_scale_uses_fixed():
-    args = build_preview_parser().parse_args(["-s", "/tmp/x.hdf5", "--no-auto-scale"])
+    args = build_preview_parser().parse_args(
+        ["-s", "/tmp/x.hdf5", "--no-lock-color-scale", "--no-auto-scale"]
+    )
+    assert args.lock_color_scale is False
     assert args.auto_scale is False
 
 

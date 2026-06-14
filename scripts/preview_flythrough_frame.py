@@ -37,13 +37,16 @@ from scripts.render_flythrough_movie import (
     VMAX,
     VMIN,
     build_camera_path,
+    build_snap_indices,
     color_limits,
     column_depth_for_camera,
+    list_snaps,
     load_gas_bar,
-    msun_scale_for_depth,
     project_flythrough_map,
+    project_frame_at_index,
+    resolve_color_lock_frame,
+    sigma_code_to_msun_pc2,
     snap_num_from_name,
-    vmin_floor_code,
     write_png,
 )
 from simviz.colormaps import resolve_cmap
@@ -82,9 +85,8 @@ def describe_map(sigma, label):
 
 def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, vmax, column_depth_code):
     """Side-by-side nearest vs production column deposit at one color scale."""
-    msun_scale = msun_scale_for_depth(column_depth_code)
-    disp_vmin = max(vmin * msun_scale, SIGMA_DISPLAY_FLOOR_MSUN_PC2)
-    disp_vmax = vmax * msun_scale
+    disp_vmin = max(float(vmin), SIGMA_DISPLAY_FLOOR_MSUN_PC2)
+    disp_vmax = float(vmax)
     prod_label = (
         f"production ({COLUMN_DEPOSIT} + "
         f"σ={COLUMN_SMOOTH_SIGMA_PX:g}px blur)"
@@ -95,11 +97,10 @@ def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, 
         (axes[0], sigma_nearest, "nearest (no splat, no blur)"),
         (axes[1], sigma_production, prod_label),
     ):
-        out = np.asarray(data, dtype=np.float64).copy()
-        out[~np.isfinite(out)] = vmin
-        out[out <= 0] = vmin
+        display = sigma_code_to_msun_pc2(data, column_depth_code)
+        display[~np.isfinite(display) | (display <= 0)] = disp_vmin
         last_im = ax.imshow(
-            out * msun_scale,
+            display,
             origin="lower",
             extent=(-1, 1, -1, 1),
             norm=colors.LogNorm(vmin=disp_vmin, vmax=disp_vmax),
@@ -141,12 +142,99 @@ def _write_compare_png(sigma_raw, sigma_smoothed, out_path, vmin, vmax):
     plt.close(fig)
 
 
+def resolve_preview_color_limits(
+    args,
+    *,
+    sigma,
+    col_depth,
+    cameras,
+    ups,
+    snap_path,
+    x,
+    y,
+    z,
+    weights,
+):
+    """Return ``(vmin, vmax, info_line)`` in M☉ pc⁻²."""
+    if args.lock_color_scale and args.path in PATH_KEYFRAMES:
+        if args.color_lock_frame is not None:
+            lock_frame = args.color_lock_frame % args.n_frames
+        else:
+            lock_frame = resolve_color_lock_frame(
+                args.path, args.n_frames, 0, args.n_frames
+            )
+        lock_depth = column_depth_for_camera(cameras[lock_frame])
+        if args.snap_dir is not None:
+            snap_paths = list_snaps(
+                args.snap_dir,
+                prefix=args.snap_prefix,
+                first_snap_number=args.first_snap_number,
+                last_snap_number=args.last_snap_number,
+            )
+            snap_indices = build_snap_indices(
+                args.n_frames,
+                len(snap_paths),
+                args.path,
+                args.frames_per_snap,
+            )
+            sigma_ref, snap_n_lock, _ = project_frame_at_index(
+                lock_frame,
+                snap_indices,
+                snap_paths,
+                cameras,
+                ups,
+                projection_weight=args.projection_weight,
+                projection_method=args.projection_method,
+                smooth_blend=args.smooth_blend,
+                snap_prefix=args.snap_prefix,
+            )
+        else:
+            lock_cam = cameras[lock_frame]
+            lock_up = (0.0, 0.0, 1.0) if ups is None else ups[lock_frame]
+            sigma_ref = project_flythrough_map(
+                x,
+                y,
+                z,
+                weights,
+                lock_cam,
+                up=lock_up,
+                projection_method=args.projection_method,
+                smooth_blend=args.smooth_blend,
+                smooth=not args.no_smooth,
+            )
+            snap_n_lock = snap_num_from_name(snap_path, prefix=args.snap_prefix)
+            if lock_frame != (args.frame_index % args.n_frames):
+                print(
+                    f"  warning: color lock frame {lock_frame} uses snap {snap_n_lock} "
+                    f"gas (pass --snap-dir for snap-accurate CMZ lock)"
+                )
+        vmin, vmax = color_limits(sigma_ref, lock_depth)
+        info = (
+            f"locked color scale from frame {lock_frame} snap {snap_n_lock}: "
+            f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+        )
+        return vmin, vmax, info
+
+    if args.auto_scale:
+        vmin, vmax = color_limits(sigma, col_depth)
+        info = f"auto color scale (this frame): vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+        return vmin, vmax, info
+
+    vmin = VMIN if args.vmin is None else args.vmin
+    vmax = VMAX if args.vmax is None else args.vmax
+    info = f"fixed color scale: vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+    return vmin, vmax, info
+
+
 def build_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--snap", type=Path, help="one snapshot hdf5")
     parser.add_argument("--snap-dir", type=Path, help="dir with prefix_N.hdf5 files")
     parser.add_argument("--snap-number", type=int)
     parser.add_argument("--snap-prefix", default=SNAP_PREFIX)
+    parser.add_argument("--first-snap-number", type=int, default=None)
+    parser.add_argument("--last-snap-number", type=int, default=None)
+    parser.add_argument("--frames-per-snap", type=int, default=2)
     parser.add_argument("--frame-index", type=int, default=0)
     parser.add_argument("--n-frames", type=int, default=300)
     parser.add_argument(
@@ -171,11 +259,23 @@ def build_parser():
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=None)
     parser.add_argument(
-        "--auto-scale",
+        "--lock-color-scale",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="autoscale vmin/vmax from this frame's percentiles (on by default, "
-        "matches the movie); pass --no-auto-scale to use the fixed --vmin/--vmax",
+        help="lock vmin/vmax from the CMZ zoom-arrival frame for zoom-observe "
+        "(default, matches the movie); use --no-lock-color-scale for per-frame autoscale",
+    )
+    parser.add_argument(
+        "--color-lock-frame",
+        type=int,
+        default=None,
+        help="frame index for color-scale lock (default: CMZ arrival for zoom-observe)",
+    )
+    parser.add_argument(
+        "--auto-scale",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="autoscale vmin/vmax from the rendered frame (only with --no-lock-color-scale)",
     )
     parser.add_argument(
         "--no-smooth",
@@ -292,16 +392,20 @@ def main():
             projection_method=args.projection_method,
             smooth_blend=args.smooth_blend,
         )
-        describe_map(sigma_nearest, "nearest")
         describe_map(sigma_production, "production")
-        if args.auto_scale:
-            vmin, vmax = color_limits(
-                sigma_production, vmin_floor=vmin_floor_code(col_depth)
-            )
-            print(f"shared color scale (from production): vmin={vmin:.4g}  vmax={vmax:.4g}")
-        else:
-            vmin = VMIN if args.vmin is None else args.vmin
-            vmax = VMAX if args.vmax is None else args.vmax
+        vmin, vmax, lock_info = resolve_preview_color_limits(
+            args,
+            sigma=sigma_production,
+            col_depth=col_depth,
+            cameras=path,
+            ups=ups,
+            snap_path=snap_path,
+            x=x,
+            y=y,
+            z=z,
+            weights=weights,
+        )
+        print(lock_info)
         if args.output is not None:
             cmp_path = Path(args.output)
         else:
@@ -333,12 +437,19 @@ def main():
         describe_map(sigma_raw, "raw histogram")
         describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")
 
-    if args.auto_scale:
-        vmin, vmax = color_limits(sigma, vmin_floor=vmin_floor_code(col_depth))
-        print(f"auto color scale: vmin={vmin:.4g}  vmax={vmax:.4g}")
-    else:
-        vmin = VMIN if args.vmin is None else args.vmin
-        vmax = VMAX if args.vmax is None else args.vmax
+    vmin, vmax, lock_info = resolve_preview_color_limits(
+        args,
+        sigma=sigma,
+        col_depth=col_depth,
+        cameras=path,
+        ups=ups,
+        snap_path=snap_path,
+        x=x,
+        y=y,
+        z=z,
+        weights=weights,
+    )
+    print(lock_info)
 
     snap_n = snap_num_from_name(snap_path, prefix=args.snap_prefix)
     title = f"snap {snap_n}  frame {args.frame_index}  cam=({cam[0]:.2f},{cam[1]:.2f},{cam[2]:.2f})"
