@@ -56,7 +56,7 @@ def test_color_limits_percentiles():
     sigma = np.logspace(-2, 2, 1000)
     depth = movie.COLUMN_DEPTH_CODE
     vmin, vmax = color_limits(sigma, depth)
-    display = movie.sigma_code_to_msun_pc2(sigma, depth)
+    display = movie.sigma_code_to_msun_pc2(sigma, depth, movie.COLUMN_DEPTH_BINS)
     assert vmin > 0 and vmax > vmin
     assert vmin >= max(
         np.percentile(display[display > 0], movie.COLOR_VMIN_PERCENTILE),
@@ -66,13 +66,14 @@ def test_color_limits_percentiles():
 
 
 def test_color_limits_depth_invariant():
-    """Same map in M☉ pc⁻² should yield similar limits regardless of sightline depth."""
+    """Same physical column map gives the same M☉ pc⁻² limits at any sightline depth."""
     sigma = np.logspace(0, 3, 500).reshape(25, 20)
     shallow = 30.0
     deep = 480.0
-    scale = deep / shallow
-    vmin_s, vmax_s = color_limits(sigma, shallow)
-    vmin_d, vmax_d = color_limits(sigma * scale, deep)
+    nz = movie.COLUMN_DEPTH_BINS
+    vmin_s, vmax_s = color_limits(sigma, shallow, nz_bins=nz)
+    sigma_deep = sigma * (shallow / deep)
+    vmin_d, vmax_d = color_limits(sigma_deep, deep, nz_bins=nz)
     assert vmin_s == pytest.approx(vmin_d, rel=1e-6)
     assert vmax_s == pytest.approx(vmax_d, rel=1e-6)
 

@@ -23,6 +23,7 @@ sys.path.insert(0, str(_PKG_ROOT))
 from scripts.render_flythrough_movie import (
     CODE_TIME_TO_MYR,
     COLUMN_DEPOSIT,
+    COLUMN_DEPTH_BINS,
     COLUMN_SMOOTH_SIGMA_PX,
     DEFAULT_CMAP,
     DISK_HALF_WIDTH_CODE,
@@ -97,7 +98,7 @@ def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, 
         (axes[0], sigma_nearest, "nearest (no splat, no blur)"),
         (axes[1], sigma_production, prod_label),
     ):
-        display = sigma_code_to_msun_pc2(data, column_depth_code)
+        display = sigma_code_to_msun_pc2(data, column_depth_code, COLUMN_DEPTH_BINS)
         display[~np.isfinite(display) | (display <= 0)] = disp_vmin
         last_im = ax.imshow(
             display,

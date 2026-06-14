@@ -38,28 +38,32 @@ CONSTANTS["arepoBfield"] = (
 )
 
 
-def code_density_sum_to_msun_pc2(density_sum_code, depth_code):
+def code_density_sum_to_msun_pc2(density_sum_code, depth_code, nz_bins=1):
     """Gas surface density (M☉ pc⁻²) from summed code ``Density`` along depth.
 
-    Same scaling as ``field_plots.plot_threepanel_bfield`` (``* dpix / 1e4``).
+    ``density_sum_code`` is a sum over ``nz_bins`` camera-depth histogram layers;
+    multiply by ``depth_code / nz_bins`` (one layer thickness) like
+    ``field_plots.plot_threepanel_bfield`` (``* dpix_z / 1e4``).
     """
     C = CONSTANTS
+    dz = np.asarray(depth_code, dtype=np.float64) / float(nz_bins)
     return (
         np.asarray(density_sum_code, dtype=np.float64)
-        * depth_code
+        * dz
         * C["msun2g"]
         / (C["pc2cm"] ** 2 * 1.0e4)
     )
 
 
-def msun_pc2_to_code_density_sum(msun_pc2, depth_code):
+def msun_pc2_to_code_density_sum(msun_pc2, depth_code, nz_bins=1):
     """Inverse of ``code_density_sum_to_msun_pc2`` for display floors and limits."""
     C = CONSTANTS
+    dz = np.asarray(depth_code, dtype=np.float64) / float(nz_bins)
     return (
         np.asarray(msun_pc2, dtype=np.float64)
         * C["pc2cm"] ** 2
         * 1.0e4
-        / (depth_code * C["msun2g"])
+        / (dz * C["msun2g"])
     )
 
 

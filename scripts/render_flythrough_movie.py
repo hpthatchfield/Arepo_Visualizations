@@ -65,7 +65,9 @@ COLUMN_DEPTH_BINS = 48
 COLUMN_DEPOSIT = "linear_xy"
 COLUMN_SMOOTH_SIGMA_PX = 0.35
 COLUMN_DEPTH_CODE = Z_FAR - Z_NEAR
-SIGMA_CODE_TO_MSUN_PC2 = float(code_density_sum_to_msun_pc2(1.0, COLUMN_DEPTH_CODE))
+SIGMA_CODE_TO_MSUN_PC2 = float(
+    code_density_sum_to_msun_pc2(1.0, COLUMN_DEPTH_CODE, COLUMN_DEPTH_BINS)
+)
 SIGMA_COLORBAR_LABEL = r"$\Sigma$ [M$_\odot\,\mathrm{pc}^{-2}$]"
 # Log-scale display floor (≈10$^{18}$ cm$^{-2}$ in μ-weighted particle units).
 DISPLAY_FLOOR_N_MOL_CM2 = 1.0e18
@@ -107,10 +109,6 @@ def column_z_far_for_camera(
 def column_depth_for_camera(camera_position, z_near=Z_NEAR, **z_far_kwargs):
     """Integrated sightline depth (code units) for column projection and unit conversion."""
     return column_z_far_for_camera(camera_position, **z_far_kwargs) - z_near
-
-
-def msun_scale_for_depth(column_depth_code):
-    return float(code_density_sum_to_msun_pc2(1.0, column_depth_code))
 
 
 PROJECTION_METHODS = ("surface", "column")
@@ -472,10 +470,11 @@ def color_limits(
     vmin_percentile=COLOR_VMIN_PERCENTILE,
     vmax_percentile=COLOR_VMAX_PERCENTILE,
     vmax_fallback_msun=VMAX_MSUN_PC2,
+    nz_bins=COLUMN_DEPTH_BINS,
 ):
     """Log-scale limits in M☉ pc⁻² (depth-normalized for column projections)."""
     display = code_density_sum_to_msun_pc2(
-        np.asarray(sigma, dtype=np.float64), column_depth_code
+        np.asarray(sigma, dtype=np.float64), column_depth_code, nz_bins
     )
     pos = display[np.isfinite(display) & (display > 0)]
     if pos.size == 0:
@@ -546,9 +545,9 @@ def list_frame_arrays(arrays_dir):
     return paths
 
 
-def sigma_code_to_msun_pc2(sigma, column_depth_code=COLUMN_DEPTH_CODE):
+def sigma_code_to_msun_pc2(sigma, column_depth_code=COLUMN_DEPTH_CODE, nz_bins=COLUMN_DEPTH_BINS):
     """Convert column-histogram sums to surface density in M☉ pc⁻²."""
-    return code_density_sum_to_msun_pc2(sigma, column_depth_code)
+    return code_density_sum_to_msun_pc2(sigma, column_depth_code, nz_bins)
 
 
 def write_png(
@@ -562,12 +561,13 @@ def write_png(
     show_colorbar=True,
     colorbar_label=SIGMA_COLORBAR_LABEL,
     column_depth_code=COLUMN_DEPTH_CODE,
+    nz_bins=COLUMN_DEPTH_BINS,
 ):
     """Write PNG; ``vmin``/``vmax`` are in M☉ pc⁻²."""
     disp_vmin = max(float(vmin), SIGMA_DISPLAY_FLOOR_MSUN_PC2)
     disp_vmax = float(vmax)
     display = sigma_code_to_msun_pc2(
-        np.asarray(sigma, dtype=np.float64), column_depth_code
+        np.asarray(sigma, dtype=np.float64), column_depth_code, nz_bins
     )
     display[~np.isfinite(display) | (display <= 0)] = disp_vmin
 
@@ -811,8 +811,7 @@ def main():
         if args.path == "zoom-observe" and lock_frame == cmz_frame:
             _log(
                 f"locked color scale at CMZ zoom arrival: frame {lock_frame}  "
-                f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}  "
-                f"M☉ pc⁻²"
+                f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
             )
         else:
             _log(
