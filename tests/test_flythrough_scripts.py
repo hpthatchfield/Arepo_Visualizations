@@ -78,10 +78,10 @@ def test_color_limits_depth_invariant():
     assert vmax_s == pytest.approx(vmax_d, rel=1e-6)
 
 
-def test_resolve_cmap_rainforest():
+def test_resolve_cmap_wildfire():
     from simviz.colormaps import resolve_cmap
 
-    cmap = resolve_cmap("rainforest")
+    cmap = resolve_cmap("wildfire")
     assert hasattr(cmap, "name")
 
 
