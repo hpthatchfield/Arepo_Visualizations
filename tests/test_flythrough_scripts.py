@@ -232,6 +232,9 @@ def test_zoom_observe_path_endpoints():
     zoom_frame = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * 240))
     r_zoom = np.linalg.norm(pts[zoom_frame])
     assert r_zoom < r0 - 10.0                       # zoom completes well before orbit
+    # Single smooth zoom-in: radius decreases monotonically through the zoom phase.
+    r_zoom_phase = np.linalg.norm(pts[: zoom_frame + 1], axis=1)
+    assert np.all(np.diff(r_zoom_phase) <= 1e-9)
 
 
 def test_zoom_observe_snap_indices_uniform_pacing():

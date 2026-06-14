@@ -213,7 +213,6 @@ def build_zoom_observe_keyframes(disk_half_width_code=None):
     sun_az, sun_el = mock_sun_view_az_el_deg()
     return (
         (0.00, r_open, 0.0, OPENING_ELEVATION_DEG),
-        (0.14, 110.0, 0.0, 52.0),
         (0.22, 9.0, 0.0, 35.0),
         (0.60, 8.0, 55.0, 35.0),
         (0.85, 9.0, 70.0, 8.0),
@@ -221,7 +220,7 @@ def build_zoom_observe_keyframes(disk_half_width_code=None):
     )
 
 
-# Nearly face-on whole disk -> float down -> zoom to CMZ -> partial orbit -> mock solar view.
+# Nearly face-on whole disk -> single smooth zoom to CMZ -> partial orbit -> mock solar view.
 # Zoom completes at fraction 0.22; snaps advance uniformly at --frames-per-snap.
 DEFAULT_ZOOM_OBSERVE_KEYFRAMES = build_zoom_observe_keyframes()
 ZOOM_OBSERVE_ZOOM_END_FRACTION = 0.22
