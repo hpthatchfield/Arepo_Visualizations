@@ -32,6 +32,7 @@ from scripts.render_flythrough_movie import (
     PROJECTION_METHODS,
     PROJECTION_WEIGHT_FIELDS,
     SIGMA_COLORBAR_LABEL,
+    SIGMA_DISPLAY_FLOOR_MSUN_PC2,
     SNAP_PREFIX,
     VMAX,
     VMIN,
@@ -39,9 +40,10 @@ from scripts.render_flythrough_movie import (
     color_limits,
     column_depth_for_camera,
     load_gas_bar,
-    n_mol_scale_for_depth,
+    msun_scale_for_depth,
     project_flythrough_map,
     snap_num_from_name,
+    vmin_floor_code,
     write_png,
 )
 from simviz.colormaps import resolve_cmap
@@ -80,9 +82,9 @@ def describe_map(sigma, label):
 
 def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, vmax, column_depth_code):
     """Side-by-side nearest vs production column deposit at one color scale."""
-    n_mol_scale = n_mol_scale_for_depth(column_depth_code)
-    disp_vmin = vmin * n_mol_scale
-    disp_vmax = vmax * n_mol_scale
+    msun_scale = msun_scale_for_depth(column_depth_code)
+    disp_vmin = max(vmin * msun_scale, SIGMA_DISPLAY_FLOOR_MSUN_PC2)
+    disp_vmax = vmax * msun_scale
     prod_label = (
         f"production ({COLUMN_DEPOSIT} + "
         f"σ={COLUMN_SMOOTH_SIGMA_PX:g}px blur)"
@@ -97,7 +99,7 @@ def _write_deposit_compare_png(sigma_nearest, sigma_production, out_path, vmin, 
         out[~np.isfinite(out)] = vmin
         out[out <= 0] = vmin
         last_im = ax.imshow(
-            out * n_mol_scale,
+            out * msun_scale,
             origin="lower",
             extent=(-1, 1, -1, 1),
             norm=colors.LogNorm(vmin=disp_vmin, vmax=disp_vmax),
@@ -293,7 +295,9 @@ def main():
         describe_map(sigma_nearest, "nearest")
         describe_map(sigma_production, "production")
         if args.auto_scale:
-            vmin, vmax = color_limits(sigma_production)
+            vmin, vmax = color_limits(
+                sigma_production, vmin_floor=vmin_floor_code(col_depth)
+            )
             print(f"shared color scale (from production): vmin={vmin:.4g}  vmax={vmax:.4g}")
         else:
             vmin = VMIN if args.vmin is None else args.vmin
@@ -330,7 +334,7 @@ def main():
         describe_map(sigma, "after masked_fill" if not args.no_smooth else "rendered (no smooth)")
 
     if args.auto_scale:
-        vmin, vmax = color_limits(sigma)
+        vmin, vmax = color_limits(sigma, vmin_floor=vmin_floor_code(col_depth))
         print(f"auto color scale: vmin={vmin:.4g}  vmax={vmax:.4g}")
     else:
         vmin = VMIN if args.vmin is None else args.vmin

@@ -52,6 +52,26 @@ def code_density_sum_to_msun_pc2(density_sum_code, depth_code):
     )
 
 
+def msun_pc2_to_code_density_sum(msun_pc2, depth_code):
+    """Inverse of ``code_density_sum_to_msun_pc2`` for display floors and limits."""
+    C = CONSTANTS
+    return (
+        np.asarray(msun_pc2, dtype=np.float64)
+        * C["pc2cm"] ** 2
+        * 1.0e4
+        / (depth_code * C["msun2g"])
+    )
+
+
+def msun_pc2_from_n_mol_cm2(n_mol_cm2, mu=None):
+    """Convert particle column density (cm⁻²) to gas surface density (M☉ pc⁻²)."""
+    C = CONSTANTS
+    if mu is None:
+        mu = C["mu"]
+    sigma_g = np.asarray(n_mol_cm2, dtype=np.float64) * mu * C["mH"]
+    return sigma_g * C["pc2cm"] ** 2 / C["msun2g"]
+
+
 def code_density_sum_to_column_g_cm2(density_sum_code, depth_code):
     """Gas mass column density (g cm⁻²) from summed code ``Density`` along depth."""
     C = CONSTANTS

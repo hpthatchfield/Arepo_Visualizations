@@ -54,16 +54,17 @@ def test_list_snaps_first_snap_number(tmp_path):
 
 def test_color_limits_percentiles():
     sigma = np.logspace(-2, 2, 1000)
-    vmin, vmax = color_limits(sigma)
+    floor = movie.vmin_floor_code(movie.COLUMN_DEPTH_CODE)
+    vmin, vmax = color_limits(sigma, vmin_floor=floor)
     assert vmin > 0 and vmax > vmin
-    assert vmin >= np.percentile(sigma, movie.COLOR_VMIN_PERCENTILE) - 1e-12
+    assert vmin >= max(np.percentile(sigma, movie.COLOR_VMIN_PERCENTILE), floor)
     assert vmax >= np.percentile(sigma, movie.COLOR_VMAX_PERCENTILE - 1)
 
 
-def test_resolve_cmap_cmasher_pride():
+def test_resolve_cmap_rainforest():
     from simviz.colormaps import resolve_cmap
 
-    cmap = resolve_cmap("pride")
+    cmap = resolve_cmap("rainforest")
     assert hasattr(cmap, "name")
 
 
@@ -185,8 +186,8 @@ def test_mock_sun_view_az_el_deg():
 
 
 def test_opening_camera_radius():
-    r = movie.opening_camera_radius(disk_half_width_code=250.0)
-    assert r > 400.0
+    r = movie.opening_camera_radius(disk_half_width_code=125.0)
+    assert 200.0 < r < 280.0
     assert movie.column_z_far_for_camera((r, 0.0, r * 0.996)) > r
 
 

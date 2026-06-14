@@ -40,7 +40,9 @@ from simviz.field_plots import (
 from simviz.colormaps import resolve_cmap
 from simviz.projections import rotate_about_axis, rotate_to_bar_frame, mock_sun_view_az_el_deg
 from simviz.utils import (
-    code_density_sum_to_n_mol_cm2,
+    code_density_sum_to_msun_pc2,
+    msun_pc2_from_n_mol_cm2,
+    msun_pc2_to_code_density_sum,
     read_snapshot_hdf5,
 )
 
@@ -63,17 +65,17 @@ COLUMN_DEPTH_BINS = 48
 COLUMN_DEPOSIT = "linear_xy"
 COLUMN_SMOOTH_SIGMA_PX = 0.35
 COLUMN_DEPTH_CODE = Z_FAR - Z_NEAR
-# Default N_mol scale for close CMZ views (adaptive per-frame depth overrides at display time).
-SIGMA_CODE_TO_N_MOL_CM2 = float(
-    code_density_sum_to_n_mol_cm2(1.0, COLUMN_DEPTH_CODE)
-)
-SIGMA_COLORBAR_LABEL = r"$N_\mathrm{mol}$ [cm$^{-2}$]"
-VMIN = 1e-30
+SIGMA_CODE_TO_MSUN_PC2 = float(code_density_sum_to_msun_pc2(1.0, COLUMN_DEPTH_CODE))
+SIGMA_COLORBAR_LABEL = r"$\Sigma$ [M$_\odot\,\mathrm{pc}^{-2}$]"
+# Log-scale display floor (≈10$^{19}$ cm$^{-2}$ in μ-weighted particle units).
+DISPLAY_FLOOR_N_MOL_CM2 = 1.0e19
+SIGMA_DISPLAY_FLOOR_MSUN_PC2 = float(msun_pc2_from_n_mol_cm2(DISPLAY_FLOOR_N_MOL_CM2))
+VMIN = msun_pc2_to_code_density_sum(SIGMA_DISPLAY_FLOOR_MSUN_PC2, COLUMN_DEPTH_CODE)
 CODE_TIME_TO_MYR = 98.7
 
 # Opening ``zoom-observe`` shot: nearly face-on, far enough to frame most of the disk.
 # Half-width on the midplane in code units (100 pc); tune to match whole-galaxy XY maps.
-DISK_HALF_WIDTH_CODE = 250.0
+DISK_HALF_WIDTH_CODE = 125.0
 OPENING_ELEVATION_DEG = 85.0
 Z_FAR_MARGIN_CODE = 8.0
 
@@ -101,16 +103,22 @@ def column_z_far_for_camera(
 
 
 def column_depth_for_camera(camera_position, z_near=Z_NEAR, **z_far_kwargs):
-    """Integrated sightline depth (code units) for column projection and N_mol conversion."""
+    """Integrated sightline depth (code units) for column projection and unit conversion."""
     return column_z_far_for_camera(camera_position, **z_far_kwargs) - z_near
 
 
-def n_mol_scale_for_depth(column_depth_code):
-    return float(code_density_sum_to_n_mol_cm2(1.0, column_depth_code))
+def msun_scale_for_depth(column_depth_code):
+    return float(code_density_sum_to_msun_pc2(1.0, column_depth_code))
+
+
+def vmin_floor_code(column_depth_code):
+    """Code-unit vmin floor matching ``SIGMA_DISPLAY_FLOOR_MSUN_PC2`` at this depth."""
+    return float(msun_pc2_to_code_density_sum(SIGMA_DISPLAY_FLOOR_MSUN_PC2, column_depth_code))
+
 
 PROJECTION_METHODS = ("surface", "column")
 ARRAYS_SUBDIR = "arrays"
-DEFAULT_CMAP = "pride"
+DEFAULT_CMAP = "rainforest"
 
 
 def _log(msg=""):
@@ -536,9 +544,9 @@ def list_frame_arrays(arrays_dir):
     return paths
 
 
-def sigma_code_to_n_mol_cm2(sigma, column_depth_code=COLUMN_DEPTH_CODE):
-    """Convert column-histogram sums to μ-weighted particle column density (cm⁻²)."""
-    return code_density_sum_to_n_mol_cm2(sigma, column_depth_code)
+def sigma_code_to_msun_pc2(sigma, column_depth_code=COLUMN_DEPTH_CODE):
+    """Convert column-histogram sums to surface density in M☉ pc⁻²."""
+    return code_density_sum_to_msun_pc2(sigma, column_depth_code)
 
 
 def write_png(
@@ -556,10 +564,10 @@ def write_png(
     out = np.asarray(sigma, dtype=np.float64).copy()
     out[~np.isfinite(out)] = vmin
     out[out <= 0] = vmin
-    n_mol_scale = n_mol_scale_for_depth(column_depth_code)
-    display = sigma_code_to_n_mol_cm2(out, column_depth_code)
-    disp_vmin = vmin * n_mol_scale
-    disp_vmax = vmax * n_mol_scale
+    msun_scale = msun_scale_for_depth(column_depth_code)
+    display = sigma_code_to_msun_pc2(out, column_depth_code)
+    disp_vmin = max(vmin * msun_scale, SIGMA_DISPLAY_FLOOR_MSUN_PC2)
+    disp_vmax = vmax * msun_scale
 
     fig, ax = plt.subplots(1, 1, figsize=(6.2, 6), dpi=150)
     im = ax.imshow(
@@ -795,7 +803,11 @@ def main():
             smooth_blend=args.smooth_blend,
             snap_prefix=args.snap_prefix,
         )
-        vmin, vmax = color_limits(sigma_ref)
+        lock_cam = cameras[lock_frame]
+        lock_depth = column_depth_for_camera(lock_cam)
+        vmin, vmax = color_limits(
+            sigma_ref, vmin_floor=vmin_floor_code(lock_depth)
+        )
         if args.path == "zoom-observe" and lock_frame == cmz_frame:
             _log(
                 f"locked color scale at CMZ zoom arrival: frame {lock_frame}  "
