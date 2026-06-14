@@ -77,6 +77,17 @@ def test_color_limits_depth_invariant():
     assert vmax_s == pytest.approx(vmax_d, rel=1e-6)
 
 
+def test_zoom_observe_color_limits_uses_opening_vmin():
+    cmz = np.logspace(-1, 2, 400).reshape(20, 20)
+    open_map = np.logspace(-3, 0, 400).reshape(20, 20)
+    depth = movie.COLUMN_DEPTH_CODE
+    vmin, vmax = movie.zoom_observe_color_limits(cmz, depth, open_map, depth * 10)
+    vmin_cmz, _ = color_limits(cmz, depth)
+    vmin_open, _ = color_limits(open_map, depth * 10)
+    assert vmin == min(vmin_cmz, vmin_open)
+    assert vmax > vmin
+
+
 def test_resolve_cmap_inferno():
     from simviz.colormaps import resolve_cmap
 

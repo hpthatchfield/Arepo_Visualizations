@@ -52,7 +52,7 @@ FOV_X_DEG = 55.0
 NX, NY = 700, 700
 Z_NEAR, Z_FAR = 0.2, 30.0
 VMAX = 2e1  # legacy code-unit default (unused; see VMAX_MSUN_PC2)
-COLOR_VMIN_PERCENTILE = 20.0
+COLOR_VMIN_PERCENTILE = 8.0
 COLOR_VMAX_PERCENTILE = 99.0
 MASKED_FILL_SIGMAS = (0.0, 12.0)
 MASKED_FILL_WEIGHT_SIGMA_PX = 1.5
@@ -477,6 +477,19 @@ def color_limits(
     return vmin, vmax
 
 
+def zoom_observe_color_limits(
+    sigma_cmz,
+    depth_cmz,
+    sigma_opening,
+    depth_opening,
+    **kwargs,
+):
+    """CMZ ``vmax`` with ``vmin`` low enough for the face-on opening frame."""
+    vmin_cmz, vmax = color_limits(sigma_cmz, depth_cmz, **kwargs)
+    vmin_open, _ = color_limits(sigma_opening, depth_opening, **kwargs)
+    return min(vmin_cmz, vmin_open), vmax
+
+
 def frame_index_from_array_name(path):
     m = re.search(r"frame_(\d+)\.npz$", Path(path).name, re.I)
     if not m:
@@ -797,12 +810,37 @@ def main():
             smooth_blend=args.smooth_blend,
             snap_prefix=args.snap_prefix,
         )
-        vmin, vmax = color_limits(sigma_ref, lock_depth)
+        if args.path == "zoom-observe":
+            sigma_open, snap_n_open, _, open_depth = project_frame_at_index(
+                0,
+                snap_indices,
+                snap_paths,
+                cameras,
+                ups,
+                projection_weight=args.projection_weight,
+                projection_method=args.projection_method,
+                smooth_blend=args.smooth_blend,
+                snap_prefix=args.snap_prefix,
+            )
+            vmin_cmz, _ = color_limits(sigma_ref, lock_depth)
+            vmin, vmax = zoom_observe_color_limits(
+                sigma_ref, lock_depth, sigma_open, open_depth
+            )
+        else:
+            snap_n_open = None
+            vmin_cmz = None
+            vmin, vmax = color_limits(sigma_ref, lock_depth)
         if args.path == "zoom-observe" and lock_frame == cmz_frame:
             _log(
                 f"locked color scale at CMZ zoom arrival: frame {lock_frame}  "
-                f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+                f"snap {snap_n_lock}  (opening snap {snap_n_open})  "
+                f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
             )
+            if vmin_cmz is not None and vmin < vmin_cmz - 1e-12:
+                _log(
+                    f"  vmin lowered from CMZ p{COLOR_VMIN_PERCENTILE:g} "
+                    f"({vmin_cmz:.4g}) by opening frame ({vmin:.4g})"
+                )
             if not (args.frame_start <= lock_frame < frame_end):
                 _log(
                     f"  (CMZ lock projected from outside this batch "

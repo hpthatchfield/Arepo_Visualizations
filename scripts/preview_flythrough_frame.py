@@ -49,6 +49,7 @@ from scripts.render_flythrough_movie import (
     sigma_code_to_msun_pc2,
     snap_num_from_name,
     write_png,
+    zoom_observe_color_limits,
 )
 from simviz.colormaps import resolve_cmap
 
@@ -189,6 +190,32 @@ def resolve_preview_color_limits(
                 smooth_blend=args.smooth_blend,
                 snap_prefix=args.snap_prefix,
             )
+            if args.path == "zoom-observe":
+                sigma_open, snap_n_open, _, open_depth = project_frame_at_index(
+                    0,
+                    snap_indices,
+                    snap_paths,
+                    cameras,
+                    ups,
+                    projection_weight=args.projection_weight,
+                    projection_method=args.projection_method,
+                    smooth_blend=args.smooth_blend,
+                    snap_prefix=args.snap_prefix,
+                )
+                vmin, vmax = zoom_observe_color_limits(
+                    sigma_ref, lock_depth, sigma_open, open_depth
+                )
+                info = (
+                    f"locked color scale: CMZ frame {lock_frame} snap {snap_n_lock}, "
+                    f"opening snap {snap_n_open}  vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+                )
+            else:
+                vmin, vmax = color_limits(sigma_ref, lock_depth)
+                info = (
+                    f"locked color scale from frame {lock_frame} snap {snap_n_lock}: "
+                    f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+                )
+            return vmin, vmax, info
         else:
             lock_cam = cameras[lock_frame]
             lock_up = (0.0, 0.0, 1.0) if ups is None else ups[lock_frame]
@@ -224,12 +251,49 @@ def resolve_preview_color_limits(
                     f"  warning: color lock frame {lock_frame} uses snap {snap_n_lock} "
                     f"gas (pass --snap-dir for snap-accurate CMZ lock)"
                 )
-        vmin, vmax = color_limits(sigma_ref, lock_depth)
-        info = (
-            f"locked color scale from frame {lock_frame} snap {snap_n_lock}: "
-            f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
-        )
-        return vmin, vmax, info
+            if args.path == "zoom-observe":
+                open_cam = cameras[0]
+                open_up = (0.0, 0.0, 1.0) if ups is None else ups[0]
+                if args.projection_method == "column":
+                    sigma_open, open_depth = project_flythrough_map(
+                        x,
+                        y,
+                        z,
+                        weights,
+                        open_cam,
+                        up=open_up,
+                        projection_method=args.projection_method,
+                        smooth_blend=args.smooth_blend,
+                        smooth=not args.no_smooth,
+                        return_depth=True,
+                    )
+                else:
+                    sigma_open = project_flythrough_map(
+                        x,
+                        y,
+                        z,
+                        weights,
+                        open_cam,
+                        up=open_up,
+                        projection_method=args.projection_method,
+                        smooth_blend=args.smooth_blend,
+                        smooth=not args.no_smooth,
+                    )
+                    open_depth = column_depth_for_camera(open_cam)
+                vmin, vmax = zoom_observe_color_limits(
+                    sigma_ref, lock_depth, sigma_open, open_depth
+                )
+                info = (
+                    f"locked color scale: CMZ frame {lock_frame} snap {snap_n_lock} "
+                    f"(opening uses same snap)  vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+                )
+            else:
+                vmin, vmax = color_limits(sigma_ref, lock_depth)
+                info = (
+                    f"locked color scale from frame {lock_frame} snap {snap_n_lock}: "
+                    f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
+                )
+            return vmin, vmax, info
 
     if args.auto_scale:
         vmin, vmax = color_limits(sigma, col_depth)
