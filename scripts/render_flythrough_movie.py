@@ -69,8 +69,8 @@ SIGMA_CODE_TO_MSUN_PC2 = float(
     code_density_sum_to_msun_pc2(1.0, COLUMN_DEPTH_CODE, COLUMN_DEPTH_BINS)
 )
 SIGMA_COLORBAR_LABEL = r"$\Sigma$ [M$_\odot\,\mathrm{pc}^{-2}$]"
-# Log-scale display floor (≈3×10$^{17}$ cm$^{-2}$ in μ-weighted particle units).
-DISPLAY_FLOOR_N_MOL_CM2 = 3.0e17
+# Log-scale display floor (≈10$^{17}$ cm$^{-2}$ in μ-weighted particle units).
+DISPLAY_FLOOR_N_MOL_CM2 = 1.0e17
 SIGMA_DISPLAY_FLOOR_MSUN_PC2 = float(msun_pc2_from_n_mol_cm2(DISPLAY_FLOOR_N_MOL_CM2))
 VMIN = SIGMA_DISPLAY_FLOOR_MSUN_PC2
 VMAX_MSUN_PC2 = 1.0e4
