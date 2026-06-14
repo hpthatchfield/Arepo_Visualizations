@@ -164,7 +164,7 @@ def resolve_preview_color_limits(
             lock_frame = resolve_color_lock_frame(
                 args.path, args.n_frames, 0, args.n_frames
             )
-        lock_depth = column_depth_for_camera(cameras[lock_frame])
+        lock_depth = None
         if args.snap_dir is not None:
             snap_paths = list_snaps(
                 args.snap_dir,
@@ -178,7 +178,7 @@ def resolve_preview_color_limits(
                 args.path,
                 args.frames_per_snap,
             )
-            sigma_ref, snap_n_lock, _ = project_frame_at_index(
+            sigma_ref, snap_n_lock, _, lock_depth = project_frame_at_index(
                 lock_frame,
                 snap_indices,
                 snap_paths,
@@ -192,17 +192,32 @@ def resolve_preview_color_limits(
         else:
             lock_cam = cameras[lock_frame]
             lock_up = (0.0, 0.0, 1.0) if ups is None else ups[lock_frame]
-            sigma_ref = project_flythrough_map(
-                x,
-                y,
-                z,
-                weights,
-                lock_cam,
-                up=lock_up,
-                projection_method=args.projection_method,
-                smooth_blend=args.smooth_blend,
-                smooth=not args.no_smooth,
-            )
+            if args.projection_method == "column":
+                sigma_ref, lock_depth = project_flythrough_map(
+                    x,
+                    y,
+                    z,
+                    weights,
+                    lock_cam,
+                    up=lock_up,
+                    projection_method=args.projection_method,
+                    smooth_blend=args.smooth_blend,
+                    smooth=not args.no_smooth,
+                    return_depth=True,
+                )
+            else:
+                sigma_ref = project_flythrough_map(
+                    x,
+                    y,
+                    z,
+                    weights,
+                    lock_cam,
+                    up=lock_up,
+                    projection_method=args.projection_method,
+                    smooth_blend=args.smooth_blend,
+                    smooth=not args.no_smooth,
+                )
+                lock_depth = column_depth_for_camera(lock_cam)
             snap_n_lock = snap_num_from_name(snap_path, prefix=args.snap_prefix)
             if lock_frame != (args.frame_index % args.n_frames):
                 print(
@@ -370,12 +385,11 @@ def main():
     idx = args.frame_index % args.n_frames
     cam = path[idx]
     up = (0.0, 0.0, 1.0) if ups is None else ups[idx]
-    col_depth = column_depth_for_camera(cam)
     cam_r = float(np.linalg.norm(cam))
     end_el = np.degrees(np.arcsin(np.clip(cam[2] / cam_r, -1.0, 1.0)))
     print(
         f"  camera r={cam_r:.1f}  elevation={end_el:.1f}°  "
-        f"column_depth={col_depth:.1f}  disk_half_width={args.disk_half_width or DISK_HALF_WIDTH_CODE}"
+        f"disk_half_width={args.disk_half_width or DISK_HALF_WIDTH_CODE}"
     )
 
     if args.compare_deposit:
@@ -388,10 +402,11 @@ def main():
             projection_method=args.projection_method,
         )
         print("projecting production (splat + blur)...")
-        sigma_production = project_flythrough_map(
+        sigma_production, col_depth = project_flythrough_map(
             x, y, z, weights, cam, smooth=True, up=up,
             projection_method=args.projection_method,
             smooth_blend=args.smooth_blend,
+            return_depth=True,
         )
         describe_map(sigma_production, "production")
         vmin, vmax, lock_info = resolve_preview_color_limits(
@@ -423,12 +438,24 @@ def main():
         return
 
     print("projecting...")
-    sigma = project_flythrough_map(
-        x, y, z, weights, cam,
-        smooth=not args.no_smooth, up=up,
-        projection_method=args.projection_method,
-        smooth_blend=args.smooth_blend,
-    )
+    if args.projection_method == "column":
+        sigma, col_depth = project_flythrough_map(
+            x, y, z, weights, cam,
+            smooth=not args.no_smooth, up=up,
+            projection_method=args.projection_method,
+            smooth_blend=args.smooth_blend,
+            return_depth=True,
+        )
+    else:
+        sigma = project_flythrough_map(
+            x, y, z, weights, cam,
+            smooth=not args.no_smooth, up=up,
+            projection_method=args.projection_method,
+            smooth_blend=args.smooth_blend,
+        )
+        col_depth = column_depth_for_camera(cam)
+
+    print(f"  column_depth={col_depth:.1f}")
 
     if args.debug:
         sigma_raw = project_flythrough_map(

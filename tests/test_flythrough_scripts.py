@@ -23,7 +23,6 @@ from scripts.render_flythrough_movie import (
     load_frame_array,
     resolve_color_lock_frame,
     save_frame_array,
-    ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM,
     ZOOM_OBSERVE_ZOOM_END_FRACTION,
 )
 
@@ -235,19 +234,14 @@ def test_zoom_observe_path_endpoints():
     assert r_zoom < r0 - 10.0                       # zoom completes well before orbit
 
 
-def test_zoom_observe_snap_indices_advance_faster_during_zoom():
+def test_zoom_observe_snap_indices_uniform_pacing():
     n_frames = 120
     n_snaps = 100
     indices = build_snap_indices(n_frames, n_snaps, "zoom-observe", frames_per_snap=2)
-    zoom_end = max(1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames)))
-    zoom_snaps = indices[zoom_end - 1] + 1
-    detail_span = n_frames - zoom_end
-    detail_snaps = indices[-1] - indices[zoom_end] + 1
-    zoom_rate = zoom_end / max(zoom_snaps, 1)
-    detail_rate = detail_span / max(detail_snaps, 1)
-    assert zoom_rate < detail_rate
-    assert zoom_rate <= ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM + 0.5
-    assert detail_rate >= 2.0 - 0.5
+    assert indices[0] == 0
+    assert indices[1] == 0
+    assert indices[2] == 1
+    assert indices[-1] == min((n_frames - 1) // 2, n_snaps - 1)
 
 
 def test_resolve_color_lock_frame_zoom_observe():
@@ -255,7 +249,7 @@ def test_resolve_color_lock_frame_zoom_observe():
     cmz = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames))
     assert resolve_color_lock_frame("zoom-observe", n_frames, 0, 1202) == cmz
     assert resolve_color_lock_frame("zoom-observe", n_frames, 0, 300) == cmz
-    assert resolve_color_lock_frame("zoom-observe", n_frames, 720, 1202) == 720
+    assert resolve_color_lock_frame("zoom-observe", n_frames, 720, 1202) == cmz
     assert resolve_color_lock_frame("orbit", n_frames, 100, 200) == 100
 
 

@@ -82,6 +82,8 @@ CODE_TIME_TO_MYR = 98.7
 DISK_HALF_WIDTH_CODE = 125.0
 OPENING_ELEVATION_DEG = 85.0
 Z_FAR_MARGIN_CODE = 8.0
+# When ``z_far`` is passed explicitly (surface splat), extend past camera–GC distance.
+Z_FAR_TAIL_CODE = 200.0
 
 
 def opening_camera_radius(
@@ -100,10 +102,11 @@ def column_z_far_for_camera(
     *,
     z_far_floor=Z_FAR,
     margin=Z_FAR_MARGIN_CODE,
+    tail=Z_FAR_TAIL_CODE,
 ):
-    """Upper depth limit that always includes the GC for the current camera distance."""
+    """Upper depth limit for surface splatting (column mode uses in-view depth instead)."""
     dist = float(np.linalg.norm(np.asarray(camera_position, dtype=np.float64)))
-    return max(z_far_floor, dist + margin)
+    return max(z_far_floor, dist + max(margin, tail))
 
 
 def column_depth_for_camera(camera_position, z_near=Z_NEAR, **z_far_kwargs):
@@ -219,11 +222,9 @@ def build_zoom_observe_keyframes(disk_half_width_code=None):
 
 
 # Nearly face-on whole disk -> float down -> zoom to CMZ -> partial orbit -> mock solar view.
-# Zoom completes at fraction 0.22 (fast camera + fast snap advance); orbit/GC phase
-# from 0.22 onward uses --frames-per-snap for detailed evolution.
+# Zoom completes at fraction 0.22; snaps advance uniformly at --frames-per-snap.
 DEFAULT_ZOOM_OBSERVE_KEYFRAMES = build_zoom_observe_keyframes()
 ZOOM_OBSERVE_ZOOM_END_FRACTION = 0.22
-ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM = 8
 
 PATH_KEYFRAMES = {
     "cinematic": DEFAULT_CINEMATIC_KEYFRAMES,
@@ -313,44 +314,19 @@ def build_camera_path(
 
 
 def build_snap_indices(n_frames, n_snaps, path, frames_per_snap=2):
-    """Map each frame index to a snapshot list index.
-
-    For ``zoom-observe``, snapshots advance quickly during the zoom-in phase
-    (``ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM``) and at ``frames_per_snap`` afterward
-    so simulation evolution is easier to follow near the GC.
-    """
+    """Map each frame index to a snapshot list index (uniform ``frames_per_snap``)."""
     indices = np.zeros(n_frames, dtype=int)
-    if path != "zoom-observe":
-        for i in range(n_frames):
-            indices[i] = min(i // frames_per_snap, n_snaps - 1)
-        return indices
-
-    zoom_end = max(1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames)))
-    snap = 0
-    since_change = 0
     for i in range(n_frames):
-        if i == zoom_end:
-            since_change = 0
-        indices[i] = min(snap, n_snaps - 1)
-        in_zoom = i < zoom_end
-        block = (
-            ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM if in_zoom else frames_per_snap
-        )
-        since_change += 1
-        if since_change >= block and snap < n_snaps - 1:
-            snap += 1
-            since_change = 0
+        indices[i] = min(i // frames_per_snap, n_snaps - 1)
     return indices
 
 
 def resolve_color_lock_frame(path, n_frames, frame_start, frame_end):
     """Pick which frame sets the locked log color scale for this render batch."""
     if path == "zoom-observe":
-        ideal = max(0, min(n_frames - 1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames))))
-    else:
-        ideal = frame_start
-    if ideal < frame_start:
-        return frame_start
+        # Always CMZ arrival, even when rendering a later batch (e.g. frames 720+).
+        return max(0, min(n_frames - 1, int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * n_frames))))
+    ideal = frame_start
     if ideal >= frame_end:
         return frame_end - 1
     return ideal
@@ -376,13 +352,22 @@ def project_frame_at_index(
     )
     cam = cameras[frame_index]
     up = (0.0, 0.0, 1.0) if ups is None else ups[frame_index]
-    sigma = project_flythrough_map(
-        x, y, z, weights, cam, up=up,
-        projection_method=projection_method,
-        smooth_blend=smooth_blend,
-    )
+    if projection_method == "column":
+        sigma, depth = project_flythrough_map(
+            x, y, z, weights, cam, up=up,
+            projection_method=projection_method,
+            smooth_blend=smooth_blend,
+            return_depth=True,
+        )
+    else:
+        sigma = project_flythrough_map(
+            x, y, z, weights, cam, up=up,
+            projection_method=projection_method,
+            smooth_blend=smooth_blend,
+        )
+        depth = column_depth_for_camera(cam)
     snap_n = snap_num_from_name(snap_path, prefix=snap_prefix)
-    return sigma, snap_n, header
+    return sigma, snap_n, header, depth
 
 
 def max_snap_index_used(snap_indices, frame_end):
@@ -431,11 +416,11 @@ def project_flythrough_map(
     up=(0.0, 0.0, 1.0),
     projection_method=PROJECTION_METHOD,
     smooth_blend=MASKED_FILL_BLEND_MODE,
+    return_depth=False,
 ):
     """Dispatch to surface splat (legacy) or column histogram integration."""
-    z_far = column_z_far_for_camera(cam)
     if projection_method == "column":
-        sigma, _ = project_column_density_camera(
+        sigma, _, depth_code = project_column_density_camera(
             x,
             y,
             z,
@@ -448,15 +433,22 @@ def project_flythrough_map(
             ny=NY,
             nz=COLUMN_DEPTH_BINS,
             z_near=Z_NEAR,
-            z_far=z_far,
+            z_far=None,
             smooth_sigma_px=COLUMN_SMOOTH_SIGMA_PX if smooth else None,
             deposit=COLUMN_DEPOSIT if smooth else "nearest",
+            return_depth=True,
         )
+        if return_depth:
+            return sigma, depth_code
         return sigma
+    z_far = column_z_far_for_camera(cam)
     if projection_method == "surface":
-        return project_surface_map(
+        sigma = project_surface_map(
             x, y, z, weights, cam, smooth=smooth, up=up, smooth_blend=smooth_blend,
         )
+        if return_depth:
+            return sigma, column_depth_for_camera(cam)
+        return sigma
     raise ValueError(f"projection_method must be one of {PROJECTION_METHODS}")
 
 
@@ -726,7 +718,7 @@ def main():
             f"warning: frames through {frame_end - 1} need {snaps_needed} snaps "
             f"but only {len(snap_paths)} available after filter; last snap will repeat"
         )
-    elif n_render > len(snap_paths) * args.frames_per_snap and args.path != "zoom-observe":
+    elif n_render > len(snap_paths) * args.frames_per_snap:
         _log(
             f"warning: {n_render} frames need more snaps than available "
             f"({len(snap_paths)} after filter); last snap will repeat"
@@ -762,10 +754,8 @@ def main():
             f"(disk half-width target {DISK_HALF_WIDTH_CODE:.0f})"
         )
         _log(
-            f"zoom-observe pacing: frames 0..{zoom_frames - 1} use "
-            f"frames_per_snap={ZOOM_OBSERVE_FRAMES_PER_SNAP_ZOOM}, "
-            f"then {zoom_frames}..{args.n_frames - 1} use frames_per_snap="
-            f"{args.frames_per_snap}"
+            f"zoom-observe CMZ arrival at frame {zoom_frames - 1} "
+            f"({ZOOM_OBSERVE_ZOOM_END_FRACTION:.0%} of path)"
         )
     _log(f"projection_weight={args.projection_weight}  projection_method={args.projection_method}")
     if args.projection_method == "surface":
@@ -780,21 +770,24 @@ def main():
     vmax = args.vmax
     if args.lock_color_scale:
         if args.color_lock_frame is not None:
-            if not (args.frame_start <= args.color_lock_frame < frame_end):
+            lock_frame = int(args.color_lock_frame) % args.n_frames
+            if args.path != "zoom-observe" and not (
+                args.frame_start <= lock_frame < frame_end
+            ):
                 _log(
-                    f"warning: --color-lock-frame {args.color_lock_frame} outside "
+                    f"warning: --color-lock-frame {lock_frame} outside "
                     f"render range [{args.frame_start}, {frame_end}); clamping"
                 )
-            lock_frame = max(
-                args.frame_start, min(args.color_lock_frame, frame_end - 1)
-            )
+                lock_frame = max(
+                    args.frame_start, min(lock_frame, frame_end - 1)
+                )
         else:
             lock_frame = resolve_color_lock_frame(
                 args.path, args.n_frames, args.frame_start, frame_end
             )
         cmz_frame = int(round(ZOOM_OBSERVE_ZOOM_END_FRACTION * args.n_frames))
         _log(f"precomputing color scale from frame {lock_frame}...")
-        sigma_ref, snap_n_lock, _ = project_frame_at_index(
+        sigma_ref, snap_n_lock, _, lock_depth = project_frame_at_index(
             lock_frame,
             snap_indices,
             snap_paths,
@@ -805,24 +798,22 @@ def main():
             smooth_blend=args.smooth_blend,
             snap_prefix=args.snap_prefix,
         )
-        lock_cam = cameras[lock_frame]
-        lock_depth = column_depth_for_camera(lock_cam)
         vmin, vmax = color_limits(sigma_ref, lock_depth)
         if args.path == "zoom-observe" and lock_frame == cmz_frame:
             _log(
                 f"locked color scale at CMZ zoom arrival: frame {lock_frame}  "
                 f"snap {snap_n_lock}  vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
             )
+            if not (args.frame_start <= lock_frame < frame_end):
+                _log(
+                    f"  (CMZ lock projected from outside this batch "
+                    f"[{args.frame_start}, {frame_end}))"
+                )
         else:
             _log(
                 f"locked color scale from frame {lock_frame}  snap {snap_n_lock}  "
                 f"vmin={vmin:.4g}  vmax={vmax:.4g}  M☉ pc⁻²"
             )
-            if args.path == "zoom-observe" and cmz_frame < args.frame_start:
-                _log(
-                    f"  (CMZ arrival is frame {cmz_frame}, before this batch; "
-                    "pass --vmin/--vmax from an earlier batch for consistency)"
-                )
 
     _log("starting render loop...")
 
@@ -849,12 +840,20 @@ def main():
 
         cam = cameras[i]
         up = (0.0, 0.0, 1.0) if ups is None else ups[i]
-        col_depth = column_depth_for_camera(cam)
-        sigma = project_flythrough_map(
-            x, y, z, weights, cam, up=up,
-            projection_method=args.projection_method,
-            smooth_blend=args.smooth_blend,
-        )
+        if args.projection_method == "column":
+            sigma, col_depth = project_flythrough_map(
+                x, y, z, weights, cam, up=up,
+                projection_method=args.projection_method,
+                smooth_blend=args.smooth_blend,
+                return_depth=True,
+            )
+        else:
+            sigma = project_flythrough_map(
+                x, y, z, weights, cam, up=up,
+                projection_method=args.projection_method,
+                smooth_blend=args.smooth_blend,
+            )
+            col_depth = column_depth_for_camera(cam)
 
         if args.save_arrays:
             array_path = frame_array_path(args.output_dir, i)

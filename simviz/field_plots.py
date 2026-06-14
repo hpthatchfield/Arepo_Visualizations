@@ -529,6 +529,7 @@ def project_column_density_camera(
     deposit="nearest",
     *,
     masses=None,
+    return_depth=False,
 ):
     """Perspective column-density map: histogram in image (u, v) and depth, then sum.
 
@@ -575,10 +576,16 @@ def project_column_density_camera(
 
     in_view = (np.abs(x_img) <= 1.0) & (np.abs(y_img) <= 1.0)
     if not np.any(in_view):
-        return np.zeros((ny, nx), dtype=np.float64), (-1.0, 1.0, -1.0, 1.0)
+        empty = np.zeros((ny, nx), dtype=np.float64)
+        if return_depth:
+            return empty, (-1.0, 1.0, -1.0, 1.0), float(z_near)
+        return empty, (-1.0, 1.0, -1.0, 1.0)
 
-    z_hi = float(z_far) if z_far is not None else float(np.max(z_vals[in_view]))
     z_lo = float(z_near)
+    if z_far is not None:
+        z_hi = float(z_far)
+    else:
+        z_hi = float(np.max(z_vals[in_view]))
     if z_hi <= z_lo:
         z_hi = z_lo + 1.0
 
@@ -596,6 +603,8 @@ def project_column_density_camera(
 
         sigma = gaussian_filter(sigma, sigma=float(smooth_sigma_px), mode="nearest")
 
+    if return_depth:
+        return sigma, (-1.0, 1.0, -1.0, 1.0), z_hi - z_lo
     return sigma, (-1.0, 1.0, -1.0, 1.0)
 
 

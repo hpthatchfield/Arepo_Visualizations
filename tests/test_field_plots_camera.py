@@ -174,6 +174,21 @@ def test_project_column_density_camera_sums_along_depth():
     assert float(col.sum()) == pytest.approx(3.0)
 
 
+def test_project_column_density_camera_return_depth():
+    cam = np.array([0.0, 0.0, -10.0])
+    up = (0.0, 1.0, 0.0)
+    x = np.array([0.0, 0.0])
+    y = np.array([0.0, 0.0])
+    z = np.array([4.0, 8.0])
+    weights = np.array([1.0, 2.0])
+    col, _, depth = project_column_density_camera(
+        x, y, z, weights, camera_position=cam, up_hint=up, nx=32, ny=32, nz=8,
+        z_near=0.5, z_far=None, smooth_sigma_px=None, return_depth=True,
+    )
+    assert depth > 0
+    assert float(col.max()) == pytest.approx(3.0)
+
+
 def test_linear_xy_deposit_reduces_speckle_preserves_peak():
     rng = np.random.default_rng(8)
     n = 600

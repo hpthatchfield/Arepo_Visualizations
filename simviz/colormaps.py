@@ -8,10 +8,13 @@ def resolve_cmap(name):
     """Return a matplotlib Colormap from a cmasher or matplotlib name."""
     if not isinstance(name, str):
         return name
-    import cmasher as cm
+    try:
+        import cmasher as cm
 
-    if hasattr(cm, name):
-        return getattr(cm, name)
+        if hasattr(cm, name):
+            return getattr(cm, name)
+    except ImportError:
+        pass
     return plt.get_cmap(name)
 
 
