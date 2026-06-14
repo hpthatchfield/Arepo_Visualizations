@@ -78,11 +78,11 @@ def test_color_limits_depth_invariant():
     assert vmax_s == pytest.approx(vmax_d, rel=1e-6)
 
 
-def test_resolve_cmap_wildfire():
+def test_resolve_cmap_inferno():
     from simviz.colormaps import resolve_cmap
 
-    cmap = resolve_cmap("wildfire")
-    assert hasattr(cmap, "name")
+    cmap = resolve_cmap("inferno")
+    assert cmap.name == "inferno"
 
 
 def test_frames_per_snap_index():

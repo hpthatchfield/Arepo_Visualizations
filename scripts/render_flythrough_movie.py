@@ -113,7 +113,7 @@ def column_depth_for_camera(camera_position, z_near=Z_NEAR, **z_far_kwargs):
 
 PROJECTION_METHODS = ("surface", "column")
 ARRAYS_SUBDIR = "arrays"
-DEFAULT_CMAP = "wildfire"
+DEFAULT_CMAP = "inferno"
 
 
 def _log(msg=""):
