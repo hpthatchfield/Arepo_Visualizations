@@ -1,6 +1,6 @@
 # simviz
 
-Utilities for plotting AREPO snapshots: B-field maps (Stokes parameters, LIC texture), gas projections (surface density, perspective fly-through), Galactic `l–b–v` histograms, and more.
+Common utilities for plotting AREPO snapshots: B-field maps (Stokes parameters, Line Integration Convolution aka LIC texture modulation), gas projections (surface density, perspective fly-through), mock-observational `l–b–v` histograms, and more.
 
 ## Install
 
@@ -11,26 +11,26 @@ pip install -e .
 
 Dependencies: NumPy, Matplotlib, h5py, SciPy (see `requirements.txt`)
 
-Portable paths (repo root, `sample_snaps/`, etc.) live in `simviz.paths`. CMZ simulation data outside the repo defaults to `~/Research/Archive/Old_Code/arepo_CMZ/TS_2020`; override with `SIMVIZ_CMZ_DATA_DIR` if yours lives elsewhere.
+Portable paths (repo root, `sample_snaps/`, etc.) live in `simviz.paths`. CMZ simulation data outside the repo defaults to my messy filestructure `~/Research/Archive/Old_Code/arepo_CMZ/TS_2020`, which you should override with `SIMVIZ_CMZ_DATA_DIR` if yours lives elsewhere.
 
 ## Examples
 
 Notebooks in `examples/` are meant to run top to bottom after you give paths for your own snapshots:
 
-| Notebook | Whats in it |
+| Notebook | Whats it do |
 |----------|----------------|
 | `bfield_demo.ipynb` | XY B-field orientation from gas cells |
-| `bfield_planck_lic_demo.ipynb` | Three-panel + Planck-style `l–b` view |
+| `bfield_planck_lic_demo.ipynb` | Three-panel + LIC `l–b` view |
 | `lbv_demo.ipynb` | CO-weighted `l–b` and `l–v` maps |
 | `surface_density_flythrough_demo.ipynb` | Camera path + PNG frames |
 
 ## Scripts
 
-Long-running jobs live in `scripts/`. Run from the repo root with the package installed (`pip install -e .`).
+Slow jobs live in `scripts/`. Run from the repo root with the package installed.
 
 ### Fly-through movie (`render_flythrough_movie.py`)
 
-Renders a PNG sequence from gas snapshots using a perspective surface-density projection. Camera paths:
+Renders a PNG sequence from gas snapshots using a perspective surface-density projection. Camera paths I've made so far:
 
 | `--path` | Description |
 |----------|-------------|
@@ -39,9 +39,9 @@ Renders a PNG sequence from gas snapshots using a perspective surface-density pr
 | `edge-orbit` | Edge-on (mock from-the-sun view) → 30° above plane → one orbit → back to edge-on |
 | `zoom-observe` | Far-out galaxy view → zoom to CMZ → partial orbit → mock solar l–b end |
 
-Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). Projections default to **density-weighted column integration** (`--projection-method column`, same weighting idea as ``project_column_density_xy``); use `--projection-method surface` for the legacy 2D splat + masked_fill path.
+Progress is printed to stdout with immediate flush (startup banner, per-snapshot load times, rolling frame progress with ETA). Projections default to density-weighted column integration (`--projection-method column`, same weighting idea as ``project_column_density_xy``); use `--projection-method surface` for the legacy 2D splat + masked_fill path.
 
-On a cluster, use `tmux` and `python -u` so SSH drops do not lose output:
+On a cluster, pleeease use `tmux` and `python -u` or every SSH drop will put you back at square one!!
 
 ```bash
 tmux new -s flythrough
@@ -58,9 +58,9 @@ python -u scripts/render_flythrough_movie.py \
   2>&1 | tee flythrough_render.log
 ```
 
-This renders **180 frames** (one snapshot per frame, snaps 820–999), giving a **~7.5 s** movie at 24 fps with a smooth, looping camera path.
+This renders 180 frames (one snapshot per frame, snaps 820–999), giving a ~7.5 s movie at 24 fps with a looping camera path.
 
-Encode frames with ffmpeg:
+Encode frames into mp4 or gif with ffmpeg:
 
 ```bash
 ffmpeg -y -framerate 24 -i flythrough_frames/frame_%04d.png \
@@ -84,7 +84,7 @@ Suggested filenames below match the current notebooks:
 
 ## Package layout
 
-| Module | Role |
+| Module | What it do |
 |--------|------|
 | `simviz.field_plots` | 2D maps, LIC, three-panel B-field plots |
 | `simviz.projections` | Bar frame, Galactic coords, camera geometry |
